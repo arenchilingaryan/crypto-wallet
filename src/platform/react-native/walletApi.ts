@@ -1,10 +1,9 @@
-import { removeWallet } from "@/src/core/wallet/removeWallet";
 import { confirmMnemonic } from "../../core/wallet/confirmMnemonic";
 import { generateWallet } from "../../core/wallet/generateWallet";
+import { importWallet } from "../../core/wallet/importWallet";
 import { loadWallet } from "../../core/wallet/loadWallet";
 import { persistWallet } from "../../core/wallet/persistWallet";
-
-import { importWallet } from "@/src/core/wallet/importWallet";
+import { removeWallet } from "../../core/wallet/removeWallet";
 import { expoRandomSource } from "./expoRandomSource";
 import { expoSecretStorage } from "./expoSecretStorage";
 

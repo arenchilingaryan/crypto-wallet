@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Button, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ActivityIndicator } from "react-native";
 
-import { getEthBalance } from "../core/blockchain/getEthBalance";
-import { walletApi } from "../platform/react-native/walletApi";
+import { HomeView } from "@/components/screens/home-view";
+import { OnboardingView } from "@/components/screens/onboarding-view";
+import { PhraseView } from "@/components/screens/phrase-view";
+import { RestoreView } from "@/components/screens/restore-view";
+import { VerifyView } from "@/components/screens/verify-view";
+import { Screen } from "@/components/ui/screen";
+import { Colors } from "@/constants/theme";
+import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
+import { walletApi } from "@/platform/react-native/walletApi";
 
 import type { Address } from "viem";
 
@@ -40,7 +46,8 @@ export default function Index() {
   const [confirmationError, setConfirmationError] = useState<string | null>(
     null,
   );
-  const [balance, setBalance] = useState<string | null>(null);
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
   useEffect(() => {
     bootstrap();
@@ -51,12 +58,16 @@ export default function Index() {
       return;
     }
 
-    getEthBalance(walletState.address)
+    setPortfolio(null);
+    setPortfolioError(null);
+
+    getPortfolio(walletState.address)
       .then((result) => {
-        setBalance(result.formatted);
+        setPortfolio(result);
       })
       .catch((error) => {
-        console.error("Balance load failed:", error);
+        console.error("Portfolio load failed:", error);
+        setPortfolioError("Failed to load portfolio");
       });
   }, [walletState]);
 
@@ -116,6 +127,23 @@ export default function Index() {
     }
   }
 
+  function startConfirming() {
+    if (walletState.status !== "generated") {
+      return;
+    }
+
+    setWord3("");
+    setWord7("");
+    setWord11("");
+    setConfirmationError(null);
+
+    setWalletState({
+      status: "confirming",
+      address: walletState.address,
+      mnemonic: walletState.mnemonic,
+    });
+  }
+
   async function handleConfirmMnemonic() {
     if (walletState.status !== "confirming") {
       return;
@@ -137,7 +165,7 @@ export default function Index() {
     ]);
 
     if (!valid) {
-      setConfirmationError("Words do not match");
+      setConfirmationError("Words do not match. Check your notes.");
       return;
     }
 
@@ -151,190 +179,82 @@ export default function Index() {
 
   if (walletState.status === "loading") {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <ActivityIndicator />
-      </SafeAreaView>
+      <Screen style={{ alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color={Colors.textSecondary} />
+      </Screen>
     );
   }
 
   if (walletState.status === "empty") {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          alignItems: "center",
-          justifyContent: "center",
+      <OnboardingView
+        onCreate={handleGenerateWallet}
+        onRestore={() => {
+          setImportError(null);
+          setWalletState({ status: "importing" });
         }}
-      >
-        <View>
-          <Text>No wallet</Text>
-
-          <Button title="Create wallet" onPress={handleGenerateWallet} />
-
-          <Button
-            title="Import wallet"
-            onPress={() => {
-              setImportError(null);
-              setWalletState({
-                status: "importing",
-              });
-            }}
-          />
-        </View>
-      </SafeAreaView>
+      />
     );
   }
 
   if (walletState.status === "importing") {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          padding: 24,
+      <RestoreView
+        mnemonic={importMnemonic}
+        error={importError}
+        onChangeMnemonic={(value) => {
+          setImportMnemonic(value);
+          setImportError(null);
         }}
-      >
-        <View>
-          <Text>Import wallet</Text>
-
-          <Text>Enter your recovery phrase</Text>
-
-          <TextInput
-            value={importMnemonic}
-            onChangeText={(value) => {
-              setImportMnemonic(value);
-              setImportError(null);
-            }}
-            placeholder="word1 word2 word3 ..."
-            multiline
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={{
-              minHeight: 120,
-              borderWidth: 1,
-              padding: 12,
-              marginVertical: 16,
-            }}
-          />
-
-          {importError && <Text>{importError}</Text>}
-
-          <Button title="Import" onPress={handleImportWallet} />
-
-          <Button
-            title="Back"
-            onPress={() => {
-              setImportMnemonic("");
-              setImportError(null);
-
-              setWalletState({
-                status: "empty",
-              });
-            }}
-          />
-        </View>
-      </SafeAreaView>
+        onSubmit={handleImportWallet}
+        onBack={() => {
+          setImportMnemonic("");
+          setImportError(null);
+          setWalletState({ status: "empty" });
+        }}
+      />
     );
   }
 
   if (walletState.status === "generated") {
-    const words = walletState.mnemonic.split(" ");
-
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          padding: 24,
+      <PhraseView
+        words={walletState.mnemonic.split(" ")}
+        onDone={startConfirming}
+        onCancel={() => {
+          setWalletState({ status: "empty" });
         }}
-      >
-        <View>
-          <Text>Recovery phrase</Text>
-
-          {words.map((word, index) => (
-            <Text key={`${word}-${index}`}>
-              {index + 1}. {word}
-            </Text>
-          ))}
-
-          <Button
-            title="I've saved it"
-            onPress={() => {
-              setWalletState({
-                status: "confirming",
-                address: walletState.address,
-                mnemonic: walletState.mnemonic,
-              });
-            }}
-          />
-        </View>
-      </SafeAreaView>
+      />
     );
   }
 
   if (walletState.status === "confirming") {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          padding: 24,
+      <VerifyView
+        word3={word3}
+        word7={word7}
+        word11={word11}
+        error={confirmationError}
+        onChangeWord3={setWord3}
+        onChangeWord7={setWord7}
+        onChangeWord11={setWord11}
+        onConfirm={handleConfirmMnemonic}
+        onShowPhrase={() => {
+          setWalletState({
+            status: "generated",
+            address: walletState.address,
+            mnemonic: walletState.mnemonic,
+          });
         }}
-      >
-        <View>
-          <Text>Confirm recovery phrase</Text>
-
-          <Text>Word #3</Text>
-
-          <TextInput
-            value={word3}
-            onChangeText={setWord3}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Text>Word #7</Text>
-
-          <TextInput
-            value={word7}
-            onChangeText={setWord7}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Text>Word #11</Text>
-
-          <TextInput
-            value={word11}
-            onChangeText={setWord11}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          {confirmationError && <Text>{confirmationError}</Text>}
-
-          <Button title="Confirm" onPress={handleConfirmMnemonic} />
-        </View>
-      </SafeAreaView>
+      />
     );
   }
 
   return (
-    <SafeAreaView
-      style={{
-        flex: 1,
-        padding: 24,
-      }}
-    >
-      <View>
-        <Text>Wallet</Text>
-        <Text>Balance: {balance ?? "Loading..."} ETH</Text>
-
-        <Text selectable>{walletState.address}</Text>
-      </View>
-    </SafeAreaView>
+    <HomeView
+      address={walletState.address}
+      portfolio={portfolio}
+      error={portfolioError}
+    />
   );
 }

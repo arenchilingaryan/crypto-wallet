@@ -1,21 +1,20 @@
 import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
+
+import { Colors } from "@/constants/theme";
 
 export default function RootLayout() {
   return (
-    <Stack>
-      <Stack.Screen
-        name="index"
-        options={{
-          title: "Wallet",
+    <>
+      <StatusBar style="light" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: {
+            backgroundColor: Colors.background,
+          },
         }}
       />
-
-      <Stack.Screen
-        name="explore"
-        options={{
-          title: "Explore",
-        }}
-      />
-    </Stack>
+    </>
   );
 }
