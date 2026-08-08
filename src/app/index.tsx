@@ -10,6 +10,7 @@ import type { Address } from "viem";
 type WalletState =
   | { status: "loading" }
   | { status: "empty" }
+  | { status: "importing" }
   | {
       status: "generated";
       address: Address;
@@ -29,6 +30,9 @@ export default function Index() {
   const [walletState, setWalletState] = useState<WalletState>({
     status: "loading",
   });
+
+  const [importMnemonic, setImportMnemonic] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
 
   const [word3, setWord3] = useState("");
   const [word7, setWord7] = useState("");
@@ -74,6 +78,27 @@ export default function Index() {
       });
     } catch (error) {
       console.error("Wallet bootstrap failed:", error);
+    }
+  }
+
+  async function handleImportWallet() {
+    try {
+      setImportError(null);
+
+      const wallet = walletApi.import(importMnemonic);
+
+      await walletApi.persist(wallet.mnemonic);
+
+      setWalletState({
+        status: "ready",
+        address: wallet.address,
+      });
+
+      setImportMnemonic("");
+    } catch (error) {
+      console.error("Wallet import failed:", error);
+
+      setImportError("Invalid recovery phrase");
     }
   }
 
@@ -151,6 +176,67 @@ export default function Index() {
           <Text>No wallet</Text>
 
           <Button title="Create wallet" onPress={handleGenerateWallet} />
+
+          <Button
+            title="Import wallet"
+            onPress={() => {
+              setImportError(null);
+              setWalletState({
+                status: "importing",
+              });
+            }}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (walletState.status === "importing") {
+    return (
+      <SafeAreaView
+        style={{
+          flex: 1,
+          padding: 24,
+        }}
+      >
+        <View>
+          <Text>Import wallet</Text>
+
+          <Text>Enter your recovery phrase</Text>
+
+          <TextInput
+            value={importMnemonic}
+            onChangeText={(value) => {
+              setImportMnemonic(value);
+              setImportError(null);
+            }}
+            placeholder="word1 word2 word3 ..."
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={{
+              minHeight: 120,
+              borderWidth: 1,
+              padding: 12,
+              marginVertical: 16,
+            }}
+          />
+
+          {importError && <Text>{importError}</Text>}
+
+          <Button title="Import" onPress={handleImportWallet} />
+
+          <Button
+            title="Back"
+            onPress={() => {
+              setImportMnemonic("");
+              setImportError(null);
+
+              setWalletState({
+                status: "empty",
+              });
+            }}
+          />
         </View>
       </SafeAreaView>
     );
