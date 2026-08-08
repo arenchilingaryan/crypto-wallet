@@ -1,9 +1,14 @@
 import { confirmMnemonic } from "../../core/wallet/confirmMnemonic";
 import { generateWallet } from "../../core/wallet/generateWallet";
 import { importWallet } from "../../core/wallet/importWallet";
-import { loadWallet } from "../../core/wallet/loadWallet";
-import { persistWallet } from "../../core/wallet/persistWallet";
-import { removeWallet } from "../../core/wallet/removeWallet";
+import {
+  addWallet,
+  getActiveWallet,
+  listWallets,
+  removeWallet,
+  setActiveWallet,
+} from "../../core/wallet/walletStore";
+
 import { expoRandomSource } from "./expoRandomSource";
 import { expoSecretStorage } from "./expoSecretStorage";
 
@@ -14,20 +19,28 @@ export const walletApi = {
     });
   },
 
+  import(mnemonic: string) {
+    return importWallet(mnemonic);
+  },
+
   persist(mnemonic: string) {
-    return persistWallet({ mnemonic }, { storage: expoSecretStorage });
+    return addWallet(mnemonic, expoSecretStorage);
   },
 
   load() {
-    return loadWallet(expoSecretStorage);
+    return getActiveWallet(expoSecretStorage);
   },
 
-  remove() {
-    return removeWallet(expoSecretStorage);
+  list() {
+    return listWallets(expoSecretStorage);
   },
 
-  import(mnemonic: string) {
-    return importWallet(mnemonic);
+  setActive(walletId: string) {
+    return setActiveWallet(walletId, expoSecretStorage);
+  },
+
+  remove(walletId: string) {
+    return removeWallet(walletId, expoSecretStorage);
   },
 
   confirmMnemonic(

@@ -11,16 +11,15 @@ export const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
 
-  placeholder: {
-    height: 240,
+  qrSection: {
     marginTop: Spacing.xxl,
-
     alignItems: "center",
     justifyContent: "center",
+  },
 
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
+  qr: {
+    padding: Spacing.lg,
+    backgroundColor: "#FFFFFF",
     borderRadius: Radius.lg,
   },
 

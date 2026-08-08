@@ -1,3 +1,4 @@
+import { DEFAULT_NETWORK } from "@/constants/networks";
 import { formatUnits, type Address } from "viem";
 
 export type PortfolioAsset = {
@@ -61,7 +62,7 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
         addresses: [
           {
             address,
-            networks: ["eth-sepolia"],
+            networks: [DEFAULT_NETWORK.id],
           },
         ],
         withMetadata: true,
@@ -144,8 +145,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
   );
 
   return {
-    network: "Ethereum Sepolia",
-    networkId: "eth-sepolia",
+    network: DEFAULT_NETWORK.name,
+    networkId: DEFAULT_NETWORK.id,
     totalUsd,
     assets,
   };

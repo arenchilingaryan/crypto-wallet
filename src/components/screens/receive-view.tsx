@@ -1,6 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
+import QRCode from "react-native-qrcode-svg";
 
 import { AppText } from "@/components/ui/text";
 
@@ -35,10 +36,15 @@ export function ReceiveView({ address, symbol, network }: ReceiveViewProps) {
         </AppText>
       </View>
 
-      <View style={styles.placeholder}>
-        <AppText variant="caption" tone="muted">
-          QR code
-        </AppText>
+      <View style={styles.qrSection}>
+        <View style={styles.qr}>
+          <QRCode
+            value={address}
+            size={200}
+            color="#000000"
+            backgroundColor="#FFFFFF"
+          />
+        </View>
       </View>
 
       <View style={styles.addressCard}>
@@ -62,7 +68,7 @@ export function ReceiveView({ address, symbol, network }: ReceiveViewProps) {
       </Pressable>
 
       <AppText variant="caption" tone="muted" style={styles.warning}>
-        Only send assets supported by this network to this address.
+        Only send {symbol} on {network} to this address.
       </AppText>
     </View>
   );
