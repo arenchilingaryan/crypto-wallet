@@ -44,4 +44,26 @@ export const styles = StyleSheet.create({
     gap: Spacing.lg,
     marginBottom: Spacing.xxl,
   },
+  addressActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+
+  copyButton: {
+    paddingHorizontal: Spacing.md,
+
+    paddingVertical: Spacing.sm,
+
+    backgroundColor: Colors.surface,
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.full,
+  },
+
+  pressed: {
+    opacity: 0.65,
+  },
 });
