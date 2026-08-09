@@ -1,4 +1,4 @@
-import { sepolia } from "viem/chains";
+import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { signMessage } from "@/core/signing/signMessage";
 import { signNativeTransfer } from "@/core/signing/signNativeTransfer";
@@ -26,7 +26,7 @@ export const signerApi = {
       {
         transaction,
         authorization,
-        expectedChainId: sepolia.id,
+        expectedChainId: ACTIVE_NETWORK.chain.id,
       },
 
       expoSecretStorage,

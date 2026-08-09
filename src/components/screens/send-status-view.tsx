@@ -15,14 +15,18 @@ export type SendStatus =
 
 type SendStatusViewProps = {
   status: SendStatus;
-
   hash: string | null;
-
+  networkName: string;
   onDone: () => void;
 };
 
-export function SendStatusView({ status, hash, onDone }: SendStatusViewProps) {
-  const content = getStatusContent(status);
+export function SendStatusView({
+  status,
+  hash,
+  networkName,
+  onDone,
+}: SendStatusViewProps) {
+  const content = getStatusContent(status, networkName);
 
   return (
     <Screen style={styles.screen}>
@@ -60,12 +64,12 @@ export function SendStatusView({ status, hash, onDone }: SendStatusViewProps) {
   );
 }
 
-function getStatusContent(status: SendStatus) {
+function getStatusContent(status: SendStatus, networkName: string) {
   switch (status) {
     case "broadcasting":
       return {
         title: "Sending transaction",
-        message: "Broadcasting to Ethereum Sepolia…",
+        message: `Broadcasting to ${networkName}…`,
       };
 
     case "pending":

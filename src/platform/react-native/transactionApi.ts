@@ -1,5 +1,5 @@
+import { ACTIVE_NETWORK } from "@/constants/networks";
 import { keccak256, type Address, type Hash, type Hex } from "viem";
-import { sepolia } from "viem/chains";
 
 import type { NativeTransferIntent } from "@/core/transactions/nativeTransfer";
 import { prepareNativeTransfer } from "@/core/transactions/prepareNativeTransfer";
@@ -13,12 +13,100 @@ type PrepareNativeTransferInput = {
   value: bigint;
 };
 
+export type NativeTransferQuote = {
+  balanceWei: bigint;
+
+  gas: bigint;
+
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+
+  maximumNetworkFeeWei: bigint;
+  maximumTotalWei: bigint;
+
+  hasSufficientBalance: boolean;
+};
+
 export const transactionApi = {
+  async quoteNativeTransfer({
+    to,
+    value,
+  }: PrepareNativeTransferInput): Promise<NativeTransferQuote> {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const rpcChainId = await ethereumPublicClient.getChainId();
+
+    if (rpcChainId !== ACTIVE_NETWORK.chain.id) {
+      throw new Error(`RPC network does not match ${ACTIVE_NETWORK.name}`);
+    }
+
+    const [balanceWei, fees] = await Promise.all([
+      ethereumPublicClient.getBalance({
+        address: activeWallet.address,
+
+        blockTag: "pending",
+      }),
+
+      ethereumPublicClient.estimateFeesPerGas(),
+    ]);
+
+    if (value >= balanceWei) {
+      return {
+        balanceWei,
+
+        gas: 0n,
+
+        maxFeePerGas: fees.maxFeePerGas,
+
+        maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+
+        maximumNetworkFeeWei: 0n,
+
+        maximumTotalWei: value,
+
+        hasSufficientBalance: false,
+      };
+    }
+
+    const gas = await ethereumPublicClient.estimateGas({
+      account: activeWallet.address,
+
+      to,
+
+      value,
+
+      data: "0x",
+    });
+
+    const maximumNetworkFeeWei = gas * fees.maxFeePerGas;
+
+    const maximumTotalWei = value + maximumNetworkFeeWei;
+
+    return {
+      balanceWei,
+
+      gas,
+
+      maxFeePerGas: fees.maxFeePerGas,
+
+      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+
+      maximumNetworkFeeWei,
+
+      maximumTotalWei,
+
+      hasSufficientBalance: maximumTotalWei <= balanceWei,
+    };
+  },
   async broadcastSignedTransaction(serializedTransaction: Hex): Promise<Hash> {
     const rpcChainId = await ethereumPublicClient.getChainId();
 
-    if (rpcChainId !== sepolia.id) {
-      throw new Error("RPC network does not match Sepolia");
+    if (rpcChainId !== ACTIVE_NETWORK.chain.id) {
+      throw new Error(`RPC network does not match ${ACTIVE_NETWORK.name}`);
     }
 
     const expectedHash = keccak256(serializedTransaction);
@@ -52,7 +140,7 @@ export const transactionApi = {
     const intent: NativeTransferIntent = {
       kind: "native-transfer",
 
-      chainId: sepolia.id,
+      chainId: ACTIVE_NETWORK.chain.id,
 
       from: activeWallet.address,
 
@@ -64,7 +152,7 @@ export const transactionApi = {
     return prepareNativeTransfer(
       intent,
       {
-        expectedChainId: sepolia.id,
+        expectedChainId: ACTIVE_NETWORK.chain.id,
 
         expectedFrom: activeWallet.address,
       },

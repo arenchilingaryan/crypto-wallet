@@ -8,6 +8,18 @@ export const styles = StyleSheet.create({
     marginBottom: Spacing.xxl,
   },
 
+  costInfo: {
+    gap: 4,
+    marginTop: 2,
+  },
+
+  costRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+
   backButton: {
     alignSelf: "flex-start",
     paddingVertical: Spacing.sm,

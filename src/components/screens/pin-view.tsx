@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  TextInput,
+  View,
+} from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
@@ -72,64 +78,69 @@ export function PinView({ mode, onSubmit }: PinViewProps) {
 
   return (
     <Screen style={styles.screen}>
-      <View style={styles.content}>
-        <AppText variant="heading">{title}</AppText>
+      <KeyboardAvoidingView
+        style={styles.keyboard}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.content}>
+          <AppText variant="heading">{title}</AppText>
 
-        <AppText variant="caption" tone="muted" style={styles.description}>
-          {description}
-        </AppText>
+          <AppText variant="caption" tone="muted" style={styles.description}>
+            {description}
+          </AppText>
 
-        <TextInput
-          value={pin}
-          onChangeText={(value) => {
-            setPin(value.replace(/\D/g, ""));
-
-            setError(null);
-          }}
-          keyboardType="number-pad"
-          secureTextEntry
-          maxLength={6}
-          placeholder="PIN"
-          placeholderTextColor="#66666D"
-          style={styles.input}
-        />
-
-        {mode === "setup" && (
           <TextInput
-            value={confirmation}
+            value={pin}
             onChangeText={(value) => {
-              setConfirmation(value.replace(/\D/g, ""));
+              setPin(value.replace(/\D/g, ""));
 
               setError(null);
             }}
             keyboardType="number-pad"
             secureTextEntry
             maxLength={6}
-            placeholder="Confirm PIN"
+            placeholder="PIN"
             placeholderTextColor="#66666D"
             style={styles.input}
           />
-        )}
 
-        {error && (
-          <AppText variant="caption" tone="danger">
-            {error}
-          </AppText>
-        )}
+          {mode === "setup" && (
+            <TextInput
+              value={confirmation}
+              onChangeText={(value) => {
+                setConfirmation(value.replace(/\D/g, ""));
 
-        <Pressable
-          disabled={loading}
-          onPress={() => {
-            void handleSubmit();
-          }}
-          style={({ pressed }) => [
-            styles.button,
-            pressed && styles.buttonPressed,
-          ]}
-        >
-          <AppText variant="label">{buttonLabel}</AppText>
-        </Pressable>
-      </View>
+                setError(null);
+              }}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={6}
+              placeholder="Confirm PIN"
+              placeholderTextColor="#66666D"
+              style={styles.input}
+            />
+          )}
+
+          {error && (
+            <AppText variant="caption" tone="danger">
+              {error}
+            </AppText>
+          )}
+
+          <Pressable
+            disabled={loading}
+            onPress={() => {
+              void handleSubmit();
+            }}
+            style={({ pressed }) => [
+              styles.button,
+              pressed && styles.buttonPressed,
+            ]}
+          >
+            <AppText variant="label">{buttonLabel}</AppText>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

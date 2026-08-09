@@ -1,28 +1,32 @@
-import { useState } from "react";
-
-import { getAddress, isAddress, parseEther } from "viem";
+import { useEffect, useRef, useState } from "react";
 
 import { useRouter } from "expo-router";
 
-import { SendNativeView } from "@/components/screens/send-native-view";
-import { SendPreviewView } from "@/components/screens/send-preview-view";
-
-import { createNativeTransferPreview } from "@/core/transactions/createNativeTransferPreview";
-
-import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
-
-import { transactionApi } from "@/platform/react-native/transactionApi";
-
-import type { Hash } from "viem";
-
-import {
-    SendStatusView,
-    type SendStatus,
-} from "@/components/screens/send-status-view";
+import { formatEther, getAddress, isAddress, type Hash } from "viem";
 
 import { PinView } from "@/components/screens/pin-view";
+import { SendNativeView } from "@/components/screens/send-native-view";
+import { SendPreviewView } from "@/components/screens/send-preview-view";
+import {
+  SendStatusView,
+  type SendStatus,
+} from "@/components/screens/send-status-view";
+
+import { ACTIVE_NETWORK } from "@/constants/networks";
+
+import { createNativeTransferPreview } from "@/core/transactions/createNativeTransferPreview";
+import {
+  normalizeEthAmountInput,
+  parseEthAmountInput,
+} from "@/core/transactions/ethAmountInput";
+import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
+
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
+import {
+  transactionApi,
+  type NativeTransferQuote,
+} from "@/platform/react-native/transactionApi";
 
 export default function SendNativeScreen() {
   const router = useRouter();
@@ -33,7 +37,13 @@ export default function SendNativeScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
+  const [inputError, setInputError] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
+
+  const [quoteLoading, setQuoteLoading] = useState(false);
+
+  const [quote, setQuote] = useState<NativeTransferQuote | null>(null);
 
   const [transaction, setTransaction] = useState<PreparedNativeTransfer | null>(
     null,
@@ -45,39 +55,132 @@ export default function SendNativeScreen() {
 
   const [reauthing, setReauthing] = useState(false);
 
-  async function handleContinue() {
-    try {
-      setError(null);
+  const quoteRequestId = useRef(0);
 
-      const recipient = to.trim();
+  useEffect(() => {
+    setQuote(null);
 
-      if (
-        !isAddress(recipient, {
-          strict: false,
+    const recipient = to.trim();
+
+    const value = parseEthAmountInput(amount);
+
+    if (!amount) {
+      setInputError(null);
+      setQuoteLoading(false);
+
+      return;
+    }
+
+    if (!value) {
+      if (amount.endsWith(".")) {
+        setInputError(null);
+      } else {
+        setInputError("Enter a valid ETH amount");
+      }
+
+      setQuoteLoading(false);
+
+      return;
+    }
+
+    if (!recipient) {
+      setInputError(null);
+      setQuoteLoading(false);
+
+      return;
+    }
+
+    if (
+      !isAddress(recipient, {
+        strict: false,
+      })
+    ) {
+      setInputError("Invalid recipient address");
+
+      setQuoteLoading(false);
+
+      return;
+    }
+
+    setInputError(null);
+    setQuoteLoading(true);
+
+    const requestId = ++quoteRequestId.current;
+
+    const timer = setTimeout(() => {
+      void transactionApi
+        .quoteNativeTransfer({
+          to: getAddress(recipient),
+
+          value,
         })
-      ) {
-        setError("Invalid recipient address");
+        .then((result) => {
+          if (requestId !== quoteRequestId.current) {
+            return;
+          }
 
-        return;
-      }
+          setQuote(result);
 
-      let value: bigint;
+          if (!result.hasSufficientBalance) {
+            setInputError("Insufficient balance");
 
-      try {
-        value = parseEther(amount.trim());
-      } catch {
-        setError("Invalid ETH amount");
+            return;
+          }
 
-        return;
-      }
+          setInputError(null);
+        })
+        .catch((quoteError) => {
+          if (requestId !== quoteRequestId.current) {
+            return;
+          }
 
-      if (value <= 0n) {
-        setError("Amount must be greater than zero");
+          console.error("Fee quote failed:", quoteError);
 
-        return;
-      }
+          setQuote(null);
 
+          setInputError("Failed to estimate network fee");
+        })
+        .finally(() => {
+          if (requestId === quoteRequestId.current) {
+            setQuoteLoading(false);
+          }
+        });
+    }, 400);
+
+    return () => {
+      clearTimeout(timer);
+
+      quoteRequestId.current++;
+    };
+  }, [to, amount]);
+  const canContinue =
+    !loading &&
+    !quoteLoading &&
+    !inputError &&
+    quote !== null &&
+    quote.hasSufficientBalance;
+
+  async function handleContinue() {
+    if (!canContinue || !quote) {
+      return;
+    }
+
+    const recipient = to.trim();
+
+    const value = parseEthAmountInput(amount);
+
+    if (
+      !value ||
+      !isAddress(recipient, {
+        strict: false,
+      })
+    ) {
+      return;
+    }
+
+    try {
       setLoading(true);
+      setError(null);
 
       const prepared = await transactionApi.prepareNativeTransfer({
         to: getAddress(recipient),
@@ -86,12 +189,12 @@ export default function SendNativeScreen() {
       });
 
       setTransaction(prepared);
-    } catch (error) {
-      console.error("Transaction preparation failed:", error);
+    } catch (prepareError) {
+      console.error("Transaction preparation failed:", prepareError);
 
       setError(
-        error instanceof Error
-          ? error.message
+        prepareError instanceof Error
+          ? prepareError.message
           : "Failed to prepare transaction",
       );
     } finally {
@@ -104,6 +207,7 @@ export default function SendNativeScreen() {
       <SendStatusView
         status={sendStatus}
         hash={transactionHash}
+        networkName={ACTIVE_NETWORK.name}
         onDone={() => {
           router.replace("/");
         }}
@@ -135,11 +239,14 @@ export default function SendNativeScreen() {
             }
 
             authorization = result.authorization;
-          } catch (error) {
-            console.error("Transaction authorization failed:", error);
+          } catch (authorizationError) {
+            console.error(
+              "Transaction authorization failed:",
+              authorizationError,
+            );
 
-            return error instanceof Error
-              ? error.message
+            return authorizationError instanceof Error
+              ? authorizationError.message
               : "Failed to authorize transaction";
           }
 
@@ -150,14 +257,15 @@ export default function SendNativeScreen() {
             );
 
             setReauthing(false);
+
             setSendStatus("broadcasting");
 
             const hash =
               await transactionApi.broadcastSignedTransaction(signed);
 
             setTransactionHash(hash);
-            setSendStatus("pending");
 
+            setSendStatus("pending");
             try {
               const receipt =
                 await transactionApi.waitForTransactionReceipt(hash);
@@ -165,21 +273,22 @@ export default function SendNativeScreen() {
               setSendStatus(
                 receipt.status === "success" ? "confirmed" : "reverted",
               );
-            } catch (error) {
-              console.error("Receipt tracking failed:", error);
+            } catch (receiptError) {
+              console.error("Receipt tracking failed:", receiptError);
 
               setSendStatus("submitted");
             }
 
             return null;
-          } catch (error) {
-            console.error("Transaction submission failed:", error);
+          } catch (submissionError) {
+            console.error("Transaction submission failed:", submissionError);
 
             setSendStatus(null);
+
             setReauthing(true);
 
-            return error instanceof Error
-              ? error.message
+            return submissionError instanceof Error
+              ? submissionError.message
               : "Failed to send transaction";
           }
         }}
@@ -190,7 +299,7 @@ export default function SendNativeScreen() {
   if (transaction) {
     const preview = createNativeTransferPreview(
       transaction,
-      "Ethereum Sepolia",
+      ACTIVE_NETWORK.name,
     );
 
     return (
@@ -198,6 +307,9 @@ export default function SendNativeScreen() {
         preview={preview}
         onBack={() => {
           setTransaction(null);
+          setTransactionHash(null);
+          setSendStatus(null);
+          setReauthing(false);
         }}
         onConfirm={() => {
           setReauthing(true);
@@ -210,14 +322,31 @@ export default function SendNativeScreen() {
     <SendNativeView
       to={to}
       amount={amount}
-      error={error}
+      error={inputError ?? error}
       loading={loading}
+      quoteLoading={quoteLoading}
+      canContinue={canContinue}
+      balanceEth={quote ? formatEther(quote.balanceWei) : null}
+      networkFeeEth={
+        quote && quote.maximumNetworkFeeWei > 0n
+          ? formatEther(quote.maximumNetworkFeeWei)
+          : null
+      }
+      totalEth={quote ? formatEther(quote.maximumTotalWei) : null}
       onChangeTo={(value) => {
         setTo(value);
+
         setError(null);
       }}
       onChangeAmount={(value) => {
-        setAmount(value);
+        const normalized = normalizeEthAmountInput(value);
+
+        if (normalized === null) {
+          return;
+        }
+
+        setAmount(normalized);
+
         setError(null);
       }}
       onContinue={() => {

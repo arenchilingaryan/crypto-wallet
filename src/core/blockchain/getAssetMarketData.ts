@@ -1,3 +1,4 @@
+import { isTestnetNetwork } from "@/constants/networks";
 import type { Address } from "viem";
 
 export type AssetMarketPoint = {
@@ -42,7 +43,7 @@ export async function getAssetMarketData({
   }
 
   // Testnet token ≠ asset with a real USD market value.
-  if (network === "eth-sepolia") {
+  if (isTestnetNetwork(network)) {
     return null;
   }
 

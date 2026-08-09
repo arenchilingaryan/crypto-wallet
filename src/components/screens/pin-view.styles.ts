@@ -4,11 +4,16 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 
 export const styles = StyleSheet.create({
   screen: {
-    justifyContent: "center",
+    justifyContent: "flex-start",
+  },
+
+  keyboard: {
+    flex: 1,
   },
 
   content: {
     gap: Spacing.md,
+    paddingTop: Spacing.xxl,
   },
 
   description: {
@@ -34,7 +39,8 @@ export const styles = StyleSheet.create({
 
   button: {
     height: 52,
-    marginTop: Spacing.sm,
+
+    marginTop: Spacing.md,
 
     alignItems: "center",
     justifyContent: "center",

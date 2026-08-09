@@ -1,4 +1,4 @@
-import { DEFAULT_NETWORK } from "@/constants/networks";
+import { ACTIVE_NETWORK } from "@/constants/networks";
 import { formatUnits, type Address } from "viem";
 
 export type PortfolioAsset = {
@@ -62,7 +62,7 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
         addresses: [
           {
             address,
-            networks: [DEFAULT_NETWORK.id],
+            networks: [ACTIVE_NETWORK.id],
           },
         ],
         withMetadata: true,
@@ -145,8 +145,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
   );
 
   return {
-    network: DEFAULT_NETWORK.name,
-    networkId: DEFAULT_NETWORK.id,
+    network: ACTIVE_NETWORK.name,
+    networkId: ACTIVE_NETWORK.id,
     totalUsd,
     assets,
   };

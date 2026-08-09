@@ -18,6 +18,14 @@ type SendNativeViewProps = {
 
   onContinue: () => void;
   onBack: () => void;
+
+  balanceEth: string | null;
+  networkFeeEth: string | null;
+  totalEth: string | null;
+
+  quoteLoading: boolean;
+
+  canContinue: boolean;
 };
 
 export function SendNativeView({
@@ -31,6 +39,12 @@ export function SendNativeView({
 
   onContinue,
   onBack,
+
+  balanceEth,
+  canContinue,
+  networkFeeEth,
+  quoteLoading,
+  totalEth,
 }: SendNativeViewProps) {
   return (
     <Screen>
@@ -82,6 +96,52 @@ export function SendNativeView({
           <AppText variant="caption" tone="muted">
             ETH
           </AppText>
+        </View>
+
+        <View style={styles.costInfo}>
+          {quoteLoading ? (
+            <AppText variant="caption" tone="muted">
+              Estimating network fee…
+            </AppText>
+          ) : (
+            <>
+              {networkFeeEth && (
+                <View style={styles.costRow}>
+                  <AppText variant="caption" tone="muted">
+                    Max network fee
+                  </AppText>
+
+                  <AppText variant="caption" tone="secondary" tabular>
+                    {networkFeeEth} ETH
+                  </AppText>
+                </View>
+              )}
+
+              {totalEth && (
+                <View style={styles.costRow}>
+                  <AppText variant="caption" tone="muted">
+                    Max total
+                  </AppText>
+
+                  <AppText variant="caption" tone="secondary" tabular>
+                    {totalEth} ETH
+                  </AppText>
+                </View>
+              )}
+
+              {balanceEth && (
+                <View style={styles.costRow}>
+                  <AppText variant="caption" tone="muted">
+                    Available
+                  </AppText>
+
+                  <AppText variant="caption" tone="secondary" tabular>
+                    {balanceEth} ETH
+                  </AppText>
+                </View>
+              )}
+            </>
+          )}
         </View>
 
         {error && (
