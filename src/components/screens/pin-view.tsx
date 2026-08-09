@@ -7,7 +7,7 @@ import { AppText } from "@/components/ui/text";
 import { styles } from "./pin-view.styles";
 
 type PinViewProps = {
-  mode: "setup" | "unlock";
+  mode: "setup" | "unlock" | "reauth";
   onSubmit: (pin: string) => Promise<string | null>;
 };
 
@@ -49,17 +49,34 @@ export function PinView({ mode, onSubmit }: PinViewProps) {
     }
   }
 
+  const title =
+    mode === "setup"
+      ? "Create PIN"
+      : mode === "reauth"
+        ? "Confirm transaction"
+        : "Wallet locked";
+
+  const description =
+    mode === "setup"
+      ? "Create a 6-digit PIN to protect access to your wallet."
+      : mode === "reauth"
+        ? "Enter your PIN to authorize this transaction."
+        : "Enter your PIN to unlock the wallet.";
+
+  const buttonLabel =
+    mode === "setup"
+      ? "Create PIN"
+      : mode === "reauth"
+        ? "Authorize"
+        : "Unlock";
+
   return (
     <Screen style={styles.screen}>
       <View style={styles.content}>
-        <AppText variant="heading">
-          {mode === "setup" ? "Create PIN" : "Wallet locked"}
-        </AppText>
+        <AppText variant="heading">{title}</AppText>
 
         <AppText variant="caption" tone="muted" style={styles.description}>
-          {mode === "setup"
-            ? "Create a 6-digit PIN to protect access to your wallet."
-            : "Enter your PIN to unlock the wallet."}
+          {description}
         </AppText>
 
         <TextInput
@@ -110,9 +127,7 @@ export function PinView({ mode, onSubmit }: PinViewProps) {
             pressed && styles.buttonPressed,
           ]}
         >
-          <AppText variant="label">
-            {mode === "setup" ? "Create PIN" : "Unlock"}
-          </AppText>
+          <AppText variant="label">{buttonLabel}</AppText>
         </Pressable>
       </View>
     </Screen>

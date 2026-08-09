@@ -1,12 +1,22 @@
 import * as Crypto from "expo-crypto";
 
-import { createPin, hasPin, verifyPin } from "@/core/security/pin";
+import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
 
 import {
-    isSessionLocked,
-    lockSession,
-    unlockSession,
+  assertSessionUnlocked,
+  isSessionLocked,
+  lockSession,
+  unlockSession,
 } from "@/core/security/sessionLock";
+
+import {
+  clearTransactionAuthorization,
+  grantTransactionAuthorization,
+} from "@/core/security/transactionAuthorization";
+
+import { createPin, hasPin, verifyPin } from "@/core/security/pin";
+
+
 
 import { expoRandomSource } from "./expoRandomSource";
 import { expoSecretStorage } from "./expoSecretStorage";
@@ -26,6 +36,30 @@ export const securityApi = {
     return hasPin(expoSecretStorage);
   },
 
+  async reauthorizeTransaction(
+    pin: string,
+    transaction: PreparedNativeTransfer,
+  ) {
+    assertSessionUnlocked();
+
+    const result = await verifyPin(pin, dependencies);
+
+    if (!result.ok) {
+      return result;
+    }
+
+    const tokenBytes = await expoRandomSource.getBytes(32);
+
+    const authorization = bytesToHex(tokenBytes);
+
+    grantTransactionAuthorization(transaction, authorization);
+
+    return {
+      ok: true as const,
+      authorization,
+    };
+  },
+
   async setupPin(pin: string) {
     await createPin(pin, dependencies);
 
@@ -43,6 +77,7 @@ export const securityApi = {
   },
 
   lock() {
+    clearTransactionAuthorization();
     lockSession();
   },
 
@@ -50,3 +85,9 @@ export const securityApi = {
     return isSessionLocked();
   },
 };
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}

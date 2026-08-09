@@ -9,6 +9,7 @@ import { formatTokenAmount, formatUsd } from "@/utils/format";
 import { PriceChart } from "@/components/charts/price-chart";
 import type { AssetMarketData } from "@/core/blockchain/getAssetMarketData";
 
+import { router } from "expo-router";
 import { styles } from "./asset-view.styles.ts";
 
 type AssetViewProps = {
@@ -75,7 +76,10 @@ export function AssetView({
       <View style={styles.actions}>
         <ActionButton label="Receive" onPress={onReceive} />
 
-        <ActionButton label="Send" disabled />
+        <ActionButton
+          label="Send"
+          onPress={() => router.push("/send/native")}
+        />
 
         <ActionButton label="Swap" disabled />
       </View>
