@@ -11,6 +11,8 @@ export type AppNetwork = {
   chain: Chain;
 
   isTestnet: boolean;
+
+  tokenSearchNetwork: string | null;
 };
 
 export const Networks = {
@@ -20,6 +22,8 @@ export const Networks = {
     nativeSymbol: "ETH",
     chain: mainnet,
     isTestnet: false,
+
+    tokenSearchNetwork: "eth",
   },
 
   sepolia: {
@@ -28,6 +32,8 @@ export const Networks = {
     nativeSymbol: "ETH",
     chain: sepolia,
     isTestnet: true,
+
+    tokenSearchNetwork: null,
   },
 } as const satisfies Record<string, AppNetwork>;
 
