@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "cryptowallet",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#0A0A0C",
+    "backgroundColor": "#100F0E",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
@@ -34,9 +34,9 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#0A0A0C",
+          "backgroundColor": "#100F0E",
           "dark": {
-            "backgroundColor": "#0A0A0C"
+            "backgroundColor": "#100F0E"
           }
         }
       ],

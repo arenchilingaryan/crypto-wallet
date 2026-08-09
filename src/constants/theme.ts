@@ -1,34 +1,46 @@
 /**
  * Design tokens. The app is dark-only.
  *
- * Rules:
+ * Palette concept — "ink & paper, annotated by a machine":
+ * - The base is warm ink (brown-black), not the usual cool fintech gray.
+ * - Human text is warm paper tones; the brightest ivory (`paper`) is reserved
+ *   for the money numbers and screen titles.
+ * - Machine text — addresses, seed-word indices, anything mono — gets the one
+ *   cool note in the system: muted teal (`accent`). Warm vs cool is the
+ *   contrast that makes the theme read as designed, without gradients.
+ * - Semantics stay semantic: olive-green = gains, brick-red = loss/danger,
+ *   mustard = caution. The primary action is paper on ink.
  * - Components consume semantic names (`Colors.surface`), never raw hex.
- * - Color carries meaning: green = gains, red = loss/danger, amber = caution.
- *   Everything else is neutral — the primary action is off-white on black.
  * - Text styles come from `TypeScale`; ad-hoc fontSize in screens is a smell.
  */
 
 import { Platform, type TextStyle } from "react-native";
 
 export const Colors = {
-  background: "#0A0A0C",
-  surface: "#141419",
-  surfaceAlt: "#1C1C22",
+  background: "#100F0E",
+  surface: "#1B1917",
+  surfaceAlt: "#252320",
 
-  border: "#26262E",
-  borderStrong: "#3B3B45",
+  border: "#2E2B27",
+  borderStrong: "#474337",
 
-  textPrimary: "#F2F2F5",
-  textSecondary: "#9C9CA8",
-  textMuted: "#616170",
+  textPrimary: "#D8D5CB",
+  textSecondary: "#9C998E",
+  textMuted: "#6C695F",
 
-  /** Primary action: off-white fill, near-black label. */
-  action: "#F2F2F5",
-  actionText: "#0C0C0E",
+  /** Brightest ivory — display numbers and titles only. */
+  paper: "#FFFCF0",
 
-  success: "#4CC38A",
-  danger: "#E5484D",
-  warning: "#E2A336",
+  /** The single cool note — machine text: addresses, indices, mono details. */
+  accent: "#3AA99F",
+
+  /** Primary action: paper fill, ink label. */
+  action: "#F1EFE2",
+  actionText: "#12110F",
+
+  success: "#A0AF54",
+  danger: "#D14D41",
+  warning: "#D0A215",
 } as const;
 
 export type ThemeColor = keyof typeof Colors;

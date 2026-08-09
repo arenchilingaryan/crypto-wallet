@@ -14,7 +14,7 @@ type PhraseViewProps = {
 
 export function PhraseView({ words, onDone, onCancel }: PhraseViewProps) {
   return (
-    <Screen scroll>
+    <Screen scroll onBack={onCancel}>
       <ScreenHeader
         title="Recovery phrase"
         subtitle="The only way to restore your wallet. Write the words down in order and keep them somewhere safe, offline."
@@ -28,7 +28,6 @@ export function PhraseView({ words, onDone, onCancel }: PhraseViewProps) {
 
       <Footer>
         <Button title="I've written them down" onPress={onDone} />
-        <Button title="Cancel" variant="ghost" onPress={onCancel} />
       </Footer>
     </Screen>
   );

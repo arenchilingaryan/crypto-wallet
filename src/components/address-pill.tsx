@@ -7,19 +7,33 @@ import { AppText } from "./ui/text";
 
 type AddressPillProps = {
   address: string;
+  onPress?: () => void;
 };
 
-/** Truncated address chip; tap to toggle the full address. */
-export function AddressPill({ address }: AddressPillProps) {
+export function AddressPill({ address, onPress }: AddressPillProps) {
   const [expanded, setExpanded] = useState(false);
+
+  function handlePress() {
+    if (onPress) {
+      onPress();
+      return;
+    }
+
+    setExpanded((value) => !value);
+  }
 
   return (
     <Pressable
-      onPress={() => setExpanded((value) => !value)}
+      onPress={handlePress}
       style={({ pressed }) => [styles.pill, pressed && styles.pressed]}
     >
-      <AppText variant="caption" tone="secondary" mono selectable={expanded}>
-        {expanded ? address : shortenAddress(address)}
+      <AppText
+        variant="caption"
+        tone="accent"
+        mono
+        selectable={expanded && !onPress}
+      >
+        {onPress || !expanded ? shortenAddress(address) : address}
       </AppText>
     </Pressable>
   );

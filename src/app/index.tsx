@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+import { useFocusEffect } from "expo-router";
 import { ActivityIndicator } from "react-native";
 
 import { HomeView } from "@/components/screens/home-view";
@@ -9,8 +11,10 @@ import { VerifyView } from "@/components/screens/verify-view";
 import { Screen } from "@/components/ui/screen";
 import { Colors } from "@/constants/theme";
 import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
+import { securityApi } from "@/platform/react-native/securityApi";
 import { walletApi } from "@/platform/react-native/walletApi";
 
+import { PinView } from "@/components/screens/pin-view";
 import type { Address } from "viem";
 
 type WalletState =
@@ -29,6 +33,10 @@ type WalletState =
     }
   | {
       status: "ready";
+      address: Address;
+    }
+  | {
+      status: "securitySetup";
       address: Address;
     };
 
@@ -49,9 +57,11 @@ export default function Index() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
-  useEffect(() => {
-    bootstrap();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      void bootstrap();
+    }, []),
+  );
 
   useEffect(() => {
     if (walletState.status !== "ready") {
@@ -92,6 +102,24 @@ export default function Index() {
     }
   }
 
+  async function finishWalletSetup(address: Address) {
+    const pinConfigured = await securityApi.hasPin();
+
+    if (!pinConfigured) {
+      setWalletState({
+        status: "securitySetup",
+        address,
+      });
+
+      return;
+    }
+
+    setWalletState({
+      status: "ready",
+      address,
+    });
+  }
+
   async function handleImportWallet() {
     try {
       setImportError(null);
@@ -100,10 +128,7 @@ export default function Index() {
 
       await walletApi.persist(wallet.mnemonic);
 
-      setWalletState({
-        status: "ready",
-        address: wallet.address,
-      });
+      await finishWalletSetup(wallet.address);
 
       setImportMnemonic("");
     } catch (error) {
@@ -171,10 +196,7 @@ export default function Index() {
 
     await walletApi.persist(walletState.mnemonic);
 
-    setWalletState({
-      status: "ready",
-      address: walletState.address,
-    });
+    await finishWalletSetup(walletState.address);
   }
 
   if (walletState.status === "loading") {
@@ -245,6 +267,30 @@ export default function Index() {
             address: walletState.address,
             mnemonic: walletState.mnemonic,
           });
+        }}
+      />
+    );
+  }
+
+  if (walletState.status === "securitySetup") {
+    return (
+      <PinView
+        mode="setup"
+        onSubmit={async (pin) => {
+          try {
+            await securityApi.setupPin(pin);
+
+            setWalletState({
+              status: "ready",
+              address: walletState.address,
+            });
+
+            return null;
+          } catch (error) {
+            console.error("PIN setup failed:", error);
+
+            return "Failed to create PIN";
+          }
         }}
       />
     );

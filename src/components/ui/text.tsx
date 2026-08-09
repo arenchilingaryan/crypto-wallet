@@ -11,6 +11,8 @@ type Tone =
   | "primary"
   | "secondary"
   | "muted"
+  | "paper"
+  | "accent"
   | "success"
   | "danger"
   | "warning";
@@ -19,6 +21,8 @@ const toneColor: Record<Tone, string> = {
   primary: Colors.textPrimary,
   secondary: Colors.textSecondary,
   muted: Colors.textMuted,
+  paper: Colors.paper,
+  accent: Colors.accent,
   success: Colors.success,
   danger: Colors.danger,
   warning: Colors.warning,

@@ -21,7 +21,7 @@ export function RestoreView({
   onBack,
 }: RestoreViewProps) {
   return (
-    <Screen scroll>
+    <Screen scroll onBack={onBack}>
       <ScreenHeader
         title="Restore wallet"
         subtitle="Enter your recovery phrase, words separated by spaces."
@@ -45,7 +45,6 @@ export function RestoreView({
           onPress={onSubmit}
           disabled={mnemonic.trim().length === 0}
         />
-        <Button title="Back" variant="ghost" onPress={onBack} />
       </Footer>
     </Screen>
   );

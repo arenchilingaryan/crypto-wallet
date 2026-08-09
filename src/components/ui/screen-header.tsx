@@ -11,7 +11,9 @@ type ScreenHeaderProps = {
 export function ScreenHeader({ title, subtitle }: ScreenHeaderProps) {
   return (
     <View style={styles.header}>
-      <AppText variant="title">{title}</AppText>
+      <AppText variant="title" tone="paper">
+        {title}
+      </AppText>
       {subtitle && (
         <AppText variant="body" tone="secondary">
           {subtitle}

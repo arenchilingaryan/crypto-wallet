@@ -32,7 +32,7 @@ export function VerifyView({
   onShowPhrase,
 }: VerifyViewProps) {
   return (
-    <Screen scroll>
+    <Screen scroll onBack={onShowPhrase}>
       <ScreenHeader
         title="Verify your phrase"
         subtitle="Enter the requested words to make sure your backup is correct."
@@ -73,11 +73,6 @@ export function VerifyView({
 
       <Footer>
         <Button title="Confirm" onPress={onConfirm} />
-        <Button
-          title="Show phrase again"
-          variant="ghost"
-          onPress={onShowPhrase}
-        />
       </Footer>
     </Screen>
   );

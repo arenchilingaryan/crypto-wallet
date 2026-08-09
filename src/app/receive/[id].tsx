@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator } from "react-native";
 
@@ -21,6 +21,8 @@ type ReceiveState = {
 };
 
 export default function ReceiveScreen() {
+  const router = useRouter();
+
   const { id } = useLocalSearchParams<{
     id?: string;
   }>();
@@ -90,6 +92,9 @@ export default function ReceiveScreen() {
         />
 
         <Screen
+          onBack={() => {
+            router.back();
+          }}
           style={{
             alignItems: "center",
             justifyContent: "center",
@@ -110,7 +115,11 @@ export default function ReceiveScreen() {
           }}
         />
 
-        <Screen>
+        <Screen
+          onBack={() => {
+            router.back();
+          }}
+        >
           <AppText variant="bodyStrong" tone="danger">
             {error ?? "Asset not found"}
           </AppText>
@@ -127,7 +136,11 @@ export default function ReceiveScreen() {
         }}
       />
 
-      <Screen>
+      <Screen
+        onBack={() => {
+          router.back();
+        }}
+      >
         <ReceiveView
           address={data.address}
           symbol={data.asset.symbol}

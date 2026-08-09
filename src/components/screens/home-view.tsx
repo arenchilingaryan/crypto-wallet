@@ -35,7 +35,12 @@ export function HomeView({ address, portfolio, error }: HomeViewProps) {
           </AppText>
         </View>
 
-        <AddressPill address={address} />
+        <AddressPill
+          address={address}
+          onPress={() => {
+            router.push("/wallets");
+          }}
+        />
       </View>
 
       <View style={styles.balance}>
@@ -43,7 +48,7 @@ export function HomeView({ address, portfolio, error }: HomeViewProps) {
           Total balance
         </AppText>
 
-        <AppText variant="display" tabular>
+        <AppText variant="display" tone="paper" tabular>
           {portfolio ? formatUsd(portfolio.totalUsd) : "—"}
         </AppText>
       </View>

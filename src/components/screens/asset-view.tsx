@@ -15,11 +15,17 @@ type AssetViewProps = {
   asset: PortfolioAsset;
   marketData: AssetMarketData | null;
   onReceive: () => void;
+  onBack: () => void;
 };
 
-export function AssetView({ asset, marketData, onReceive }: AssetViewProps) {
+export function AssetView({
+  asset,
+  marketData,
+  onReceive,
+  onBack,
+}: AssetViewProps) {
   return (
-    <Screen>
+    <Screen onBack={onBack}>
       <View style={styles.assetHeader}>
         <View style={styles.icon}>
           {asset.logo ? (
@@ -45,7 +51,7 @@ export function AssetView({ asset, marketData, onReceive }: AssetViewProps) {
           Price
         </AppText>
 
-        <AppText variant="display" tabular>
+        <AppText variant="display" tone="paper" tabular>
           {marketData ? formatUsd(marketData.priceUsd) : "—"}
         </AppText>
 

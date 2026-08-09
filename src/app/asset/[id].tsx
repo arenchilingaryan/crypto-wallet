@@ -100,6 +100,9 @@ export default function AssetScreen() {
         />
 
         <Screen
+          onBack={() => {
+            router.back();
+          }}
           style={{
             alignItems: "center",
             justifyContent: "center",
@@ -120,7 +123,11 @@ export default function AssetScreen() {
           }}
         />
 
-        <Screen>
+        <Screen
+          onBack={() => {
+            router.back();
+          }}
+        >
           <AppText variant="bodyStrong" tone="danger">
             {error ?? "Asset not found"}
           </AppText>
@@ -151,6 +158,9 @@ export default function AssetScreen() {
               id,
             },
           });
+        }}
+        onBack={() => {
+          router.back();
         }}
       />
     </>
