@@ -20,7 +20,12 @@ type ScreenProps = {
   style?: ViewStyle;
 };
 
-export function Screen({ children, scroll = false, onBack, style }: ScreenProps) {
+export function Screen({
+  children,
+  scroll = false,
+  onBack,
+  style,
+}: ScreenProps) {
   const backRow = onBack ? (
     <View style={styles.backRow}>
       <BackButton onPress={onBack} />

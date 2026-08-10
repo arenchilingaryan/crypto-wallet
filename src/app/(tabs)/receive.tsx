@@ -12,7 +12,7 @@ import { searchAssets } from "@/core/blockchain/searchAssets";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
-export default function SearchScreen() {
+export default function ReceiveScreen() {
   const router = useRouter();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -49,7 +49,7 @@ export default function SearchScreen() {
 
         setPortfolio(nextPortfolio);
       } catch (bootstrapError) {
-        console.error("Search bootstrap failed:", bootstrapError);
+        console.error("Receive bootstrap failed:", bootstrapError);
 
         if (!mounted) {
           return;
@@ -62,7 +62,6 @@ export default function SearchScreen() {
         );
 
         setResults([]);
-
         setLoading(false);
       }
     })();
@@ -99,7 +98,7 @@ export default function SearchScreen() {
             return;
           }
 
-          console.error("Asset search failed:", searchError);
+          console.error("Receive asset search failed:", searchError);
 
           setResults([]);
 
@@ -121,18 +120,18 @@ export default function SearchScreen() {
 
       requestId.current++;
     };
-  }, [query, portfolio]);
+  }, [portfolio, query]);
 
   return (
     <AssetPickerView
-      title="Search assets"
+      title="Receive"
       query={query}
       results={results}
       loading={loading}
       error={error}
       onChangeQuery={setQuery}
       onBack={() => {
-        router.back();
+        router.replace("/");
       }}
       onSelect={(asset) => {
         const assetId =
@@ -143,7 +142,7 @@ export default function SearchScreen() {
         }
 
         router.push({
-          pathname: "/asset/[id]",
+          pathname: "/receive/[id]",
 
           params: {
             id: assetId,

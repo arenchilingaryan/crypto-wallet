@@ -23,7 +23,6 @@ import type { Portfolio } from "@/core/blockchain/getPortfolio";
 
 import { formatUsd } from "@/utils/format";
 
-import { ReceiveIcon } from "@/components/icons/receive-icon";
 
 import { styles } from "./home-view.styles";
 
@@ -128,26 +127,6 @@ export function HomeView({ address, portfolio, error }: HomeViewProps) {
         <AppText variant="display" tone="paper" tabular>
           {portfolio ? formatUsd(portfolio.totalUsd) : "—"}
         </AppText>
-      </View>
-
-      <View style={styles.walletActions}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Receive assets"
-          onPress={() => {
-            router.push("/receive");
-          }}
-          style={({ pressed }) => [
-            styles.walletAction,
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.walletActionIcon}>
-            <ReceiveIcon size={21} color={Colors.textPrimary} />
-          </View>
-
-          <AppText variant="label">Receive</AppText>
-        </Pressable>
       </View>
 
       {/* ASSETS */}

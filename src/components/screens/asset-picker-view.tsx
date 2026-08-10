@@ -9,7 +9,9 @@ import { styles } from "./asset-picker-view.styles";
 
 import { SearchIcon } from "@/components/icons/search-icon";
 import { Colors } from "@/constants/theme";
+import { router } from "expo-router";
 import { AssetIcon } from "../asset-icon";
+import { BackIcon } from "../icons/back-icon";
 
 type AssetPickerViewProps = {
   title: string;
@@ -46,8 +48,17 @@ export function AssetPickerView({
   return (
     <Screen style={styles.screen}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} style={styles.backButton}>
-          <AppText variant="label">Back</AppText>
+        <Pressable
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/");
+            }
+          }}
+          style={styles.backButton}
+        >
+          <BackIcon size={22} color={Colors.textPrimary} />
         </Pressable>
 
         <AppText variant="heading">{title}</AppText>
