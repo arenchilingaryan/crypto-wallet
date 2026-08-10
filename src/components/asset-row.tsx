@@ -1,9 +1,9 @@
-import { Image } from "expo-image";
 import { Pressable, View } from "react-native";
 
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
 import { formatTokenAmount, formatUsd } from "@/utils/format";
 
+import { AssetIcon } from "./asset-icon";
 import { styles } from "./asset-row.styles";
 import { AppText } from "./ui/text";
 
@@ -23,13 +23,7 @@ export function AssetRow({ asset, onPress }: AssetRowProps) {
       ]}
     >
       <View style={styles.icon}>
-        {asset.logo ? (
-          <Image source={{ uri: asset.logo }} style={styles.logo} />
-        ) : (
-          <AppText variant="caption" tone="secondary" style={styles.initials}>
-            {asset.symbol.slice(0, 3)}
-          </AppText>
-        )}
+        <AssetIcon symbol={asset.symbol} logo={asset.logo} type={asset.type} />
       </View>
 
       <View style={styles.name}>

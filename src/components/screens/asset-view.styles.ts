@@ -5,7 +5,9 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 export const styles = StyleSheet.create({
   assetHeader: {
     flexDirection: "row",
+
     alignItems: "center",
+
     gap: Spacing.md,
   },
 
@@ -65,6 +67,12 @@ export const styles = StyleSheet.create({
 
   actionPressed: {
     opacity: 0.65,
+  },
+
+  assetIdentity: {
+    flex: 1,
+
+    gap: 2,
   },
 
   details: {

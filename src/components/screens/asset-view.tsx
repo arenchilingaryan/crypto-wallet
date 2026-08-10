@@ -1,8 +1,3 @@
-import { Image } from "expo-image";
-import { Pressable, View } from "react-native";
-
-import { Screen } from "@/components/ui/screen";
-import { AppText } from "@/components/ui/text";
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
 import { formatTokenAmount, formatUsd } from "@/utils/format";
 
@@ -10,7 +5,13 @@ import { PriceChart } from "@/components/charts/price-chart";
 import type { AssetMarketData } from "@/core/blockchain/getAssetMarketData";
 
 import { router } from "expo-router";
-import { styles } from "./asset-view.styles.ts";
+import { Pressable, View } from "react-native";
+
+import { AssetIcon } from "@/components/asset-icon";
+import { Screen } from "@/components/ui/screen";
+import { AppText } from "@/components/ui/text";
+
+import { styles } from "./asset-view.styles";
 
 type AssetViewProps = {
   asset: PortfolioAsset;
@@ -28,20 +29,17 @@ export function AssetView({
   return (
     <Screen onBack={onBack}>
       <View style={styles.assetHeader}>
-        <View style={styles.icon}>
-          {asset.logo ? (
-            <Image source={{ uri: asset.logo }} style={styles.logo} />
-          ) : (
-            <AppText variant="bodyStrong" tone="secondary">
-              {asset.symbol.slice(0, 3)}
-            </AppText>
-          )}
-        </View>
+        <AssetIcon
+          type={asset.type}
+          symbol={asset.symbol}
+          logo={asset.logo}
+          size={64}
+        />
 
-        <View>
+        <View style={styles.assetIdentity}>
           <AppText variant="heading">{asset.symbol}</AppText>
 
-          <AppText variant="caption" tone="muted">
+          <AppText variant="caption" tone="secondary">
             {asset.name}
           </AppText>
         </View>

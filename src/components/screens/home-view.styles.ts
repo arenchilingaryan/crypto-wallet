@@ -10,11 +10,6 @@ export const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: Spacing.sm,
   },
-  network: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
   networkDot: {
     width: 6,
     height: 6,
@@ -44,10 +39,20 @@ export const styles = StyleSheet.create({
     gap: Spacing.lg,
     marginBottom: Spacing.xxl,
   },
-  addressActions: {
-    flexDirection: "row",
+
+  searchButton: {
+    width: 44,
+    height: 44,
+
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surface,
   },
 
   copyButton: {
@@ -63,7 +68,95 @@ export const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
 
+  topRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+    justifyContent: "space-between",
+
+    gap: Spacing.md,
+  },
+
+  network: {
+    flex: 1,
+
+    gap: 2,
+  },
+
+  iconButton: {
+    width: 44,
+    height: 44,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surface,
+  },
+
+  addressActions: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: Spacing.sm,
+  },
+
+  copyIconButton: {
+    width: 38,
+    height: 38,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surface,
+  },
+
+  copyFeedback: {
+    alignSelf: "flex-end",
+
+    marginTop: 2,
+  },
+
   pressed: {
-    opacity: 0.65,
+    opacity: 0.6,
+  },
+
+  walletActions: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: Spacing.md,
+  },
+
+  walletAction: {
+    alignItems: "center",
+
+    gap: Spacing.xs,
+  },
+
+  walletActionIcon: {
+    width: 48,
+    height: 48,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surface,
   },
 });
