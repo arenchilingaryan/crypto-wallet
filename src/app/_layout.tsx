@@ -121,6 +121,8 @@ export default function RootLayout() {
 
       <Stack.Screen name="send/native" />
 
+      <Stack.Screen name="send/erc20" />
+
       <Stack.Screen name="wallets" />
 
       <Stack.Screen name="change-pin" />

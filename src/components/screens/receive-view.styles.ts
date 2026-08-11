@@ -5,6 +5,7 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
+    gap: Spacing.xl,
   },
 
   header: {
@@ -12,9 +13,8 @@ export const styles = StyleSheet.create({
   },
 
   qrSection: {
-    marginTop: Spacing.xxl,
     alignItems: "center",
-    justifyContent: "center",
+    paddingVertical: Spacing.lg,
   },
 
   qr: {
@@ -23,28 +23,39 @@ export const styles = StyleSheet.create({
     borderRadius: Radius.lg,
   },
 
-  addressCard: {
-    marginTop: Spacing.xl,
-    padding: Spacing.lg,
-    gap: Spacing.sm,
-
+  details: {
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
     borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+
+  detailBlock: {
+    gap: Spacing.sm,
+  },
+
+  detailDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
   },
 
   address: {
-    lineHeight: 22,
+    lineHeight: 21,
   },
 
   copyButton: {
     minHeight: 52,
-    marginTop: Spacing.lg,
-
     alignItems: "center",
     justifyContent: "center",
-
     backgroundColor: Colors.surfaceAlt,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -56,7 +67,7 @@ export const styles = StyleSheet.create({
   },
 
   warning: {
-    marginTop: Spacing.lg,
     textAlign: "center",
+    lineHeight: 20,
   },
 });

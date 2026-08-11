@@ -76,7 +76,25 @@ export function AssetView({
 
         <ActionButton
           label="Send"
-          onPress={() => router.push("/send/native")}
+          onPress={() => {
+            if (asset.type === "native") {
+              router.push("/send/native");
+
+              return;
+            }
+
+            if (!asset.contractAddress) {
+              return;
+            }
+
+            router.push({
+              pathname: "/send/erc20",
+
+              params: {
+                contract: asset.contractAddress,
+              },
+            });
+          }}
         />
 
         <ActionButton label="Swap" disabled />

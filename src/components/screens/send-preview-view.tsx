@@ -2,13 +2,14 @@ import { Pressable, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+import type { Erc20TransferPreview } from "@/core/transactions/createErc20TransferPreview";
 import type { NativeTransferPreview } from "@/core/transactions/createNativeTransferPreview";
 import { shortenAddress } from "@/utils/format";
 
 import { styles } from "./send-preview-view.styles";
 
 type SendPreviewViewProps = {
-  preview: NativeTransferPreview;
+  preview: NativeTransferPreview | Erc20TransferPreview;
 
   onBack: () => void;
 
@@ -43,13 +44,21 @@ export function SendPreviewView({
           You send
         </AppText>
 
-        <AppText variant="display">{preview.amountEth} ETH</AppText>
+        <AppText variant="display">
+          {preview.kind === "native"
+            ? `${preview.amountEth} ETH`
+            : `${preview.amountToken} ${preview.symbol}`}
+        </AppText>
       </View>
 
       <View style={styles.details}>
         <Row label="From" value={shortenAddress(preview.from)} mono />
 
         <Row label="To" value={shortenAddress(preview.to)} mono />
+
+        {preview.kind === "erc20" && (
+          <Row label="Token" value={shortenAddress(preview.token)} mono />
+        )}
 
         <Row label="Network" value={preview.network} />
 
@@ -60,11 +69,19 @@ export function SendPreviewView({
 
         <View style={styles.divider} />
 
-        <Row
-          label="Max total"
-          value={`${preview.maximumTotalEth} ETH`}
-          strong
-        />
+        {preview.kind === "native" ? (
+          <Row
+            label="Max total"
+            value={`${preview.maximumTotalEth} ETH`}
+            strong
+          />
+        ) : (
+          <Row
+            label="Total"
+            value={`${preview.amountToken} ${preview.symbol} + fee`}
+            strong
+          />
+        )}
       </View>
 
       <AppText variant="caption" tone="muted" style={styles.notice}>

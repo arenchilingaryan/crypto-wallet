@@ -1,4 +1,11 @@
+import type { PreparedErc20Transfer } from "@/core/transactions/erc20Transfer";
 import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
+
+// Оба вида переводов авторизуются одинаково: fingerprint строится из общих
+// полей, а для ERC-20 получатель и сумма зашиты в data.
+export type AuthorizableTransaction =
+  | PreparedNativeTransfer
+  | PreparedErc20Transfer;
 
 const AUTHORIZATION_TTL_MS = 30_000;
 
@@ -10,7 +17,7 @@ type ActiveAuthorization = {
 
 let activeAuthorization: ActiveAuthorization | null = null;
 
-function fingerprintTransaction(transaction: PreparedNativeTransfer) {
+function fingerprintTransaction(transaction: AuthorizableTransaction) {
   return [
     transaction.kind,
     transaction.type,
@@ -32,7 +39,7 @@ function fingerprintTransaction(transaction: PreparedNativeTransfer) {
 }
 
 export function grantTransactionAuthorization(
-  transaction: PreparedNativeTransfer,
+  transaction: AuthorizableTransaction,
   token: string,
 ) {
   activeAuthorization = {
@@ -45,7 +52,7 @@ export function grantTransactionAuthorization(
 }
 
 export function consumeTransactionAuthorization(
-  transaction: PreparedNativeTransfer,
+  transaction: AuthorizableTransaction,
   token: string,
 ) {
   const authorization = activeAuthorization;

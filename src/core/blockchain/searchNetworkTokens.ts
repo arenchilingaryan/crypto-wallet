@@ -4,6 +4,29 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import type { AssetSearchResult } from "./assetSearch";
 import { getTokenMetadata } from "./getTokenMetadata";
+import {
+  findKnownTokenByAddress,
+  searchKnownTokensByText,
+  type KnownToken,
+} from "./knownTokens";
+
+function mapKnownToken(token: KnownToken): AssetSearchResult {
+  return {
+    type: "erc20",
+
+    symbol: token.symbol,
+
+    name: token.name,
+
+    contractAddress: token.address,
+
+    logo: token.logo,
+
+    source: "network",
+
+    balance: null,
+  };
+}
 
 type GeckoToken = {
   id: string;
@@ -48,6 +71,13 @@ export async function searchNetworkTokens(
       strict: false,
     })
   ) {
+    // Известный токен резолвим локально — без сетевого запроса.
+    const known = findKnownTokenByAddress(ACTIVE_NETWORK.id, getAddress(query));
+
+    if (known) {
+      return [mapKnownToken(known)];
+    }
+
     const metadata = await getTokenMetadata(query);
 
     if (!metadata) {
@@ -73,10 +103,16 @@ export async function searchNetworkTokens(
     ];
   }
 
+  // Текст: сначала курируемый реестр сети (на тестнете это единственный
+  // источник имён), затем — GeckoTerminal, если сеть им индексируется.
+  const knownMatches = searchKnownTokensByText(ACTIVE_NETWORK.id, query).map(
+    mapKnownToken,
+  );
+
   const network = ACTIVE_NETWORK.tokenSearchNetwork;
 
   if (!network) {
-    return [];
+    return knownMatches;
   }
 
   const params = new URLSearchParams({
@@ -104,9 +140,13 @@ export async function searchNetworkTokens(
 
   const tokens = result.included ?? [];
 
-  const seen = new Set<string>();
+  const seen = new Set<string>(
+    knownMatches
+      .map((token) => token.contractAddress?.toLowerCase())
+      .filter((address): address is string => Boolean(address)),
+  );
 
-  const results: AssetSearchResult[] = [];
+  const results: AssetSearchResult[] = [...knownMatches];
 
   for (const token of tokens) {
     if (token.type !== "token") {

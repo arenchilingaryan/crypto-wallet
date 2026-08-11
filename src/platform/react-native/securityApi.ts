@@ -1,6 +1,6 @@
 import * as Crypto from "expo-crypto";
 
-import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
+import type { AuthorizableTransaction } from "@/core/security/transactionAuthorization";
 
 import {
   assertSessionUnlocked,
@@ -53,7 +53,7 @@ export const securityApi = {
 
   async reauthorizeTransaction(
     pin: string,
-    transaction: PreparedNativeTransfer,
+    transaction: AuthorizableTransaction,
   ) {
     assertSessionUnlocked();
 

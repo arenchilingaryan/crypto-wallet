@@ -13,13 +13,20 @@ export type TrackedTransaction = {
 
   from: Address;
 
+  // Для ERC-20 здесь человеческий получатель токенов, не контракт.
   to: Address;
 
-  assetType: "native";
+  assetType: "native" | "erc20";
 
   symbol: string;
 
+  // Сырые единицы: wei для ETH, минимальные единицы токена для ERC-20.
   valueWei: string;
+
+  // Только для ERC-20.
+  tokenDecimals?: number;
+
+  contractAddress?: Address | null;
 
   createdAt: number;
 

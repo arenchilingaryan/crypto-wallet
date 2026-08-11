@@ -1,6 +1,9 @@
 import * as Clipboard from "expo-clipboard";
+
 import { useState } from "react";
+
 import { Pressable, View } from "react-native";
+
 import QRCode from "react-native-qrcode-svg";
 
 import { AppText } from "@/components/ui/text";
@@ -10,10 +13,18 @@ import { styles } from "./receive-view.styles";
 type ReceiveViewProps = {
   address: string;
   symbol: string;
+  assetName: string;
   network: string;
+  contractAddress: string | null;
 };
 
-export function ReceiveView({ address, symbol, network }: ReceiveViewProps) {
+export function ReceiveView({
+  address,
+  symbol,
+  assetName,
+  network,
+  contractAddress,
+}: ReceiveViewProps) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -32,7 +43,7 @@ export function ReceiveView({ address, symbol, network }: ReceiveViewProps) {
         <AppText variant="heading">Receive {symbol}</AppText>
 
         <AppText variant="caption" tone="muted">
-          {network}
+          {assetName}
         </AppText>
       </View>
 
@@ -47,14 +58,48 @@ export function ReceiveView({ address, symbol, network }: ReceiveViewProps) {
         </View>
       </View>
 
-      <View style={styles.addressCard}>
-        <AppText variant="overline" tone="muted">
-          Your address
-        </AppText>
+      <View style={styles.details}>
+        <View style={styles.detailRow}>
+          <AppText variant="caption" tone="muted">
+            Network
+          </AppText>
 
-        <AppText variant="bodyStrong" mono selectable style={styles.address}>
-          {address}
-        </AppText>
+          <AppText variant="bodyStrong">{network}</AppText>
+        </View>
+
+        <View style={styles.detailDivider} />
+
+        <View style={styles.detailBlock}>
+          <AppText variant="caption" tone="muted">
+            Your address
+          </AppText>
+
+          <AppText variant="bodyStrong" mono selectable style={styles.address}>
+            {address}
+          </AppText>
+        </View>
+
+        {contractAddress && (
+          <>
+            <View style={styles.detailDivider} />
+
+            <View style={styles.detailBlock}>
+              <AppText variant="caption" tone="muted">
+                Token contract
+              </AppText>
+
+              <AppText
+                variant="caption"
+                tone="secondary"
+                mono
+                selectable
+                style={styles.address}
+              >
+                {contractAddress}
+              </AppText>
+            </View>
+          </>
+        )}
       </View>
 
       <Pressable

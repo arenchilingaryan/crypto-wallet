@@ -1,15 +1,19 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator } from "react-native";
+import { getAddress, isAddress } from "viem";
 
 import { AssetView } from "@/components/screens/asset-view";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+import { ACTIVE_NETWORK } from "@/constants/networks";
 import { Colors } from "@/constants/theme";
 import {
     getPortfolio,
     type PortfolioAsset,
 } from "@/core/blockchain/getPortfolio";
+import { getTokenMetadata } from "@/core/blockchain/getTokenMetadata";
+import { findKnownTokenByAddress } from "@/core/blockchain/knownTokens";
 import { walletApi } from "@/platform/react-native/walletApi";
 
 import {
@@ -53,7 +57,7 @@ export default function AssetScreen() {
 
       const portfolio = await getPortfolio(wallet.address);
 
-      const foundAsset = portfolio.assets.find((item) => {
+      let foundAsset = portfolio.assets.find((item) => {
         if (assetId === "native") {
           return item.type === "native";
         }
@@ -64,6 +68,42 @@ export default function AssetScreen() {
 
         return item.contractAddress.toLowerCase() === assetId.toLowerCase();
       });
+
+      // Токен из поиска, которого ещё нет в портфеле: показываем
+      // карточку с нулевым балансом по реестру/метаданным.
+      if (
+        !foundAsset &&
+        assetId !== "native" &&
+        isAddress(assetId, {
+          strict: false,
+        })
+      ) {
+        const tokenAddress = getAddress(assetId);
+
+        const known = findKnownTokenByAddress(ACTIVE_NETWORK.id, tokenAddress);
+
+        const metadata = known ?? (await getTokenMetadata(tokenAddress));
+
+        if (metadata) {
+          foundAsset = {
+            type: "erc20",
+
+            symbol: metadata.symbol,
+
+            name: metadata.name,
+
+            balance: "0",
+
+            priceUsd: null,
+
+            valueUsd: null,
+
+            logo: metadata.logo,
+
+            contractAddress: tokenAddress,
+          };
+        }
+      }
 
       if (!foundAsset) {
         throw new Error("Asset not found");

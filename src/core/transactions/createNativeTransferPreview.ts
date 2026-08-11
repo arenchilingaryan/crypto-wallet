@@ -3,6 +3,8 @@ import { formatEther } from "viem";
 import type { PreparedNativeTransfer } from "./nativeTransfer";
 
 export type NativeTransferPreview = {
+  kind: "native";
+
   network: string;
 
   from: string;
@@ -23,6 +25,8 @@ export function createNativeTransferPreview(
   const maximumTotalWei = transaction.value + maximumNetworkFeeWei;
 
   return {
+    kind: "native",
+
     network,
 
     from: transaction.from,

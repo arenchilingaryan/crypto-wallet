@@ -1,4 +1,4 @@
-import { formatEther, type Address } from "viem";
+import { formatEther, formatUnits, type Address } from "viem";
 
 import type { ActivityItem } from "./activity";
 
@@ -31,13 +31,22 @@ function trackedToActivity(
 
     symbol: transaction.symbol,
 
-    amount: formatEther(BigInt(transaction.valueWei)),
+    amount:
+      transaction.assetType === "erc20"
+        ? formatUnits(
+            BigInt(transaction.valueWei),
+            transaction.tokenDecimals ?? 18,
+          )
+        : formatEther(BigInt(transaction.valueWei)),
 
     from: transaction.from,
 
     to: transaction.to,
 
-    contractAddress: null,
+    contractAddress:
+      transaction.assetType === "erc20"
+        ? (transaction.contractAddress ?? null)
+        : null,
 
     blockNumber: transaction.blockNumber
       ? BigInt(transaction.blockNumber)

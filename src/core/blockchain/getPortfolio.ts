@@ -2,6 +2,8 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { formatUnits, type Address } from "viem";
 
+import { findKnownTokenByAddress } from "./knownTokens";
+
 export type PortfolioAsset = {
   type: "native" | "erc20";
 
@@ -237,7 +239,16 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
         valueUsd,
 
-        logo: token.tokenMetadata?.logo ?? null,
+        // Alchemy на тестнете логотипов почти не отдаёт —
+        // добираем из курируемого реестра.
+        logo:
+          token.tokenMetadata?.logo ??
+          (token.tokenAddress?.startsWith("0x")
+            ? (findKnownTokenByAddress(
+                ACTIVE_NETWORK.id,
+                token.tokenAddress as Address,
+              )?.logo ?? null)
+            : null),
 
         contractAddress: token.tokenAddress?.startsWith("0x")
           ? (token.tokenAddress as Address)
