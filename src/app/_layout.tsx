@@ -113,6 +113,8 @@ export default function RootLayout() {
     >
       <Stack.Screen name="(tabs)" />
 
+      <Stack.Screen name="onboarding" />
+
       <Stack.Screen name="search" />
 
       <Stack.Screen name="asset/[id]" />
