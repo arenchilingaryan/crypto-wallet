@@ -7,7 +7,7 @@ import { ActivityIndicator, View } from "react-native";
 import { ActivityIcon } from "@/components/icons/activity-icon";
 import { HomeIcon } from "@/components/icons/home-icon";
 import { ReceiveIcon } from "@/components/icons/receive-icon";
-import { SettingsIcon } from "@/components/icons/settings-icon";
+import { SwapIcon } from "@/components/icons/swap-icon";
 
 import { TabBar } from "@/components/ui/tab-bar";
 
@@ -99,10 +99,10 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
-        name="settings"
+        name="swap"
         options={{
-          title: "Settings",
-          tabBarIcon: ({ color }) => <SettingsIcon size={22} color={color} />,
+          title: "Swap",
+          tabBarIcon: ({ color }) => <SwapIcon size={22} color={color} />,
         }}
       />
     </Tabs>

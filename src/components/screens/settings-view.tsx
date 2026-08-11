@@ -17,6 +17,8 @@ type SettingsViewProps = {
   onManageWallets: () => void;
 
   onChangePin: () => void;
+
+  onBack?: () => void;
 };
 
 type SettingsRowProps = {
@@ -89,9 +91,10 @@ export function SettingsView({
   version,
   onManageWallets,
   onChangePin,
+  onBack,
 }: SettingsViewProps) {
   return (
-    <Screen scroll>
+    <Screen scroll onBack={onBack}>
       <AppText variant="title" tone="paper" style={styles.heading}>
         Settings
       </AppText>

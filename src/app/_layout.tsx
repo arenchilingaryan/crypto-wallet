@@ -127,6 +127,8 @@ export default function RootLayout() {
 
       <Stack.Screen name="wallets" />
 
+      <Stack.Screen name="settings" />
+
       <Stack.Screen name="change-pin" />
 
       <Stack.Screen name="activity/[hash]" />

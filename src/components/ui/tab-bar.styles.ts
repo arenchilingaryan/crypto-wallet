@@ -34,12 +34,21 @@ export const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
 
+  // flexGrow анимируется (1 → 2 для активной вкладки).
   item: {
     flexGrow: 1,
 
-    // Нулевой basis: ширины распределяет только flexGrow,
-    // а не длина содержимого.
     flexBasis: 0,
+
+    height: 44,
+
+    borderRadius: Radius.full,
+
+    overflow: "hidden",
+  },
+
+  itemPressable: {
+    flex: 1,
 
     flexDirection: "row",
 
@@ -48,20 +57,16 @@ export const styles = StyleSheet.create({
 
     gap: 6,
 
-    height: 44,
-
-    borderRadius: Radius.full,
-
     paddingHorizontal: Spacing.sm,
   },
 
-  itemActive: {
+  // Подложка активной пилюли; появляется через opacity.
+  itemPill: {
+    ...StyleSheet.absoluteFillObject,
+
+    borderRadius: Radius.full,
+
     backgroundColor: Colors.surfaceAlt,
-
-    // Активной пилюле с подписью нужно больше места, чем иконкам.
-    flexGrow: 2,
-
-    paddingHorizontal: Spacing.lg,
   },
 
   itemPressed: {

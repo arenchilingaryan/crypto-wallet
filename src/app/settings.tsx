@@ -19,6 +19,9 @@ export default function SettingsScreen() {
       onChangePin={() => {
         router.push("/change-pin");
       }}
+      onBack={() => {
+        router.back();
+      }}
     />
   );
 }

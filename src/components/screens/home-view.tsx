@@ -13,6 +13,7 @@ import { AssetRow } from "@/components/asset-row";
 
 import { CopyIcon } from "@/components/icons/copy-icon";
 import { SearchIcon } from "@/components/icons/search-icon";
+import { SettingsIcon } from "@/components/icons/settings-icon";
 
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
@@ -63,21 +64,38 @@ export function HomeView({ address, portfolio, error }: HomeViewProps) {
           </AppText>
         </View>
 
-        {/* SEARCH — TOP RIGHT */}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Search assets"
-          onPress={() => {
-            router.push("/search");
-          }}
-          style={({ pressed }) => [
-            styles.iconButton,
+        {/* TOP RIGHT: настройки сверху, поиск под ними */}
+        <View style={styles.headerButtons}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            onPress={() => {
+              router.push("/settings");
+            }}
+            style={({ pressed }) => [
+              styles.iconButton,
 
-            pressed && styles.pressed,
-          ]}
-        >
-          <SearchIcon size={21} color={Colors.textPrimary} />
-        </Pressable>
+              pressed && styles.pressed,
+            ]}
+          >
+            <SettingsIcon size={21} color={Colors.textPrimary} />
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Search assets"
+            onPress={() => {
+              router.push("/search");
+            }}
+            style={({ pressed }) => [
+              styles.iconButton,
+
+              pressed && styles.pressed,
+            ]}
+          >
+            <SearchIcon size={21} color={Colors.textPrimary} />
+          </Pressable>
+        </View>
       </View>
 
       {/* WALLET ADDRESS */}

@@ -11,6 +11,7 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 import { Colors } from "@/constants/theme";
 
 import { getTokenMetadata } from "@/core/blockchain/getTokenMetadata";
+import { findKnownTokenByAddress } from "@/core/blockchain/knownTokens";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
@@ -113,7 +114,10 @@ export default function ReceiveScreen() {
 
     const contractAddress = getAddress(assetId);
 
-    const metadata = await getTokenMetadata(contractAddress);
+    // Известный токен резолвим из реестра — без сетевого запроса.
+    const metadata =
+      findKnownTokenByAddress(ACTIVE_NETWORK.id, contractAddress) ??
+      (await getTokenMetadata(contractAddress));
 
     if (!metadata) {
       throw new Error("Token metadata not found");

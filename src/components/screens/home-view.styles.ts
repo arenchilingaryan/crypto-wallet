@@ -83,6 +83,12 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
+  headerButtons: {
+    alignItems: "center",
+
+    gap: Spacing.sm,
+  },
+
   iconButton: {
     width: 44,
     height: 44,
