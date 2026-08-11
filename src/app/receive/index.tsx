@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
@@ -12,7 +12,7 @@ import { searchAssets } from "@/core/blockchain/searchAssets";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
-export default function ReceiveAssetPickerScreen() {
+export default function ReceiveScreen() {
   const router = useRouter();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -27,49 +27,57 @@ export default function ReceiveAssetPickerScreen() {
 
   const requestId = useRef(0);
 
-  useEffect(() => {
-    let mounted = true;
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
 
-    void (async () => {
-      try {
-        setLoading(true);
-        setError(null);
+      requestId.current++;
 
-        const wallet = await walletApi.load();
+      setPortfolio(null);
+      setResults([]);
+      setLoading(true);
+      setError(null);
 
-        if (!wallet) {
-          throw new Error("Active wallet not found");
+      void (async () => {
+        try {
+          const wallet = await walletApi.load();
+
+          if (!wallet) {
+            throw new Error("Active wallet not found");
+          }
+
+          const nextPortfolio = await getPortfolio(wallet.address);
+
+          if (!mounted) {
+            return;
+          }
+
+          setPortfolio(nextPortfolio);
+        } catch (bootstrapError) {
+          if (!mounted) {
+            return;
+          }
+
+          console.error("Receive bootstrap failed:", bootstrapError);
+
+          setError(
+            bootstrapError instanceof Error
+              ? bootstrapError.message
+              : "Failed to load assets",
+          );
+
+          setResults([]);
+          setLoading(false);
         }
+      })();
 
-        const nextPortfolio = await getPortfolio(wallet.address);
+      return () => {
+        mounted = false;
 
-        if (!mounted) {
-          return;
-        }
-
-        setPortfolio(nextPortfolio);
-      } catch (bootstrapError) {
-        console.error("Receive picker bootstrap failed:", bootstrapError);
-
-        if (!mounted) {
-          return;
-        }
-
-        setError(
-          bootstrapError instanceof Error
-            ? bootstrapError.message
-            : "Failed to load assets",
-        );
-
-        setResults([]);
-        setLoading(false);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+        requestId.current++;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     if (!portfolio) {
@@ -120,7 +128,7 @@ export default function ReceiveAssetPickerScreen() {
 
       requestId.current++;
     };
-  }, [query, portfolio]);
+  }, [portfolio, query]);
 
   return (
     <AssetPickerView
@@ -131,7 +139,7 @@ export default function ReceiveAssetPickerScreen() {
       error={error}
       onChangeQuery={setQuery}
       onBack={() => {
-        router.back();
+        router.replace("/");
       }}
       onSelect={(asset) => {
         const assetId =

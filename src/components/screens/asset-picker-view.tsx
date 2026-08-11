@@ -95,7 +95,7 @@ export function AssetPickerView({
         </AppText>
       )}
 
-      {!loading && !error && query.trim() && results.length === 0 && (
+      {!loading && !error && query.trim().length > 0 && results.length === 0 && (
         <View style={styles.empty}>
           <AppText variant="bodyStrong">No assets found</AppText>
 

@@ -43,10 +43,6 @@ export async function searchNetworkTokens(
     return [];
   }
 
-  /*
-   * Exact contract address:
-   * Alchemy — source of truth.
-   */
   if (
     isAddress(query, {
       strict: false,
@@ -79,12 +75,6 @@ export async function searchNetworkTokens(
 
   const network = ACTIVE_NETWORK.tokenSearchNetwork;
 
-  /*
-   * Например Sepolia.
-   *
-   * Там пока remote name catalog
-   * не используем.
-   */
   if (!network) {
     return [];
   }

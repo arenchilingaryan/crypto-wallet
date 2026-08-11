@@ -36,6 +36,21 @@ export const securityApi = {
     return hasPin(expoSecretStorage);
   },
 
+  // Без настроенного PIN экрана разблокировки нет, поэтому доменную сессию
+  // некому открыть — а sessionLock стартует запертым. Открываем её явно,
+  // но только пока PIN действительно не задан.
+  async unlockWhenNoPin() {
+    const configured = await hasPin(expoSecretStorage);
+
+    if (configured) {
+      return false;
+    }
+
+    unlockSession();
+
+    return true;
+  },
+
   async reauthorizeTransaction(
     pin: string,
     transaction: PreparedNativeTransfer,
@@ -64,6 +79,12 @@ export const securityApi = {
     await createPin(pin, dependencies);
 
     unlockSession();
+  },
+
+  // Проверка текущего PIN без побочных эффектов на сессию —
+  // для флоу смены PIN в настройках. Лимиты попыток общие с unlock.
+  verifyCurrentPin(pin: string) {
+    return verifyPin(pin, dependencies);
   },
 
   async unlock(pin: string) {

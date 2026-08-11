@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
@@ -27,49 +27,54 @@ export default function ReceiveScreen() {
 
   const requestId = useRef(0);
 
-  useEffect(() => {
-    let mounted = true;
+  // Таб живёт всё время жизни навигатора, поэтому портфель перечитываем
+  // на каждом фокусе — иначе после смены активного кошелька здесь
+  // остаются активы предыдущего.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
 
-    void (async () => {
-      try {
-        setLoading(true);
-        setError(null);
+      void (async () => {
+        try {
+          setLoading(true);
+          setError(null);
 
-        const wallet = await walletApi.load();
+          const wallet = await walletApi.load();
 
-        if (!wallet) {
-          throw new Error("Active wallet not found");
+          if (!wallet) {
+            throw new Error("Active wallet not found");
+          }
+
+          const nextPortfolio = await getPortfolio(wallet.address);
+
+          if (!active) {
+            return;
+          }
+
+          setPortfolio(nextPortfolio);
+        } catch (bootstrapError) {
+          console.error("Receive bootstrap failed:", bootstrapError);
+
+          if (!active) {
+            return;
+          }
+
+          setError(
+            bootstrapError instanceof Error
+              ? bootstrapError.message
+              : "Failed to load assets",
+          );
+
+          setResults([]);
+          setLoading(false);
         }
+      })();
 
-        const nextPortfolio = await getPortfolio(wallet.address);
-
-        if (!mounted) {
-          return;
-        }
-
-        setPortfolio(nextPortfolio);
-      } catch (bootstrapError) {
-        console.error("Receive bootstrap failed:", bootstrapError);
-
-        if (!mounted) {
-          return;
-        }
-
-        setError(
-          bootstrapError instanceof Error
-            ? bootstrapError.message
-            : "Failed to load assets",
-        );
-
-        setResults([]);
-        setLoading(false);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     if (!portfolio) {

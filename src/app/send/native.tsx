@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { ActivityIndicator } from "react-native";
+
 import { useRouter } from "expo-router";
 
 import { formatEther, getAddress, isAddress, type Hash } from "viem";
@@ -11,8 +13,10 @@ import {
   SendStatusView,
   type SendStatus,
 } from "@/components/screens/send-status-view";
+import { Screen } from "@/components/ui/screen";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
+import { Colors } from "@/constants/theme";
 
 import { createNativeTransferPreview } from "@/core/transactions/createNativeTransferPreview";
 import {
@@ -23,6 +27,7 @@ import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer"
 
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
+import { trackedTransactionApi } from "@/platform/react-native/trackedTransactionApi";
 import {
   transactionApi,
   type NativeTransferQuote,
@@ -55,7 +60,14 @@ export default function SendNativeScreen() {
 
   const [reauthing, setReauthing] = useState(false);
 
+  // null = ещё не знаем; false = PIN не настроен, перед отправкой создаём.
+  const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
+
   const quoteRequestId = useRef(0);
+
+  useEffect(() => {
+    void securityApi.hasPin().then(setPinConfigured);
+  }, []);
 
   useEffect(() => {
     setQuote(null);
@@ -215,83 +227,131 @@ export default function SendNativeScreen() {
     );
   }
 
+  async function authorizeAndSend(pin: string): Promise<string | null> {
+    if (!transaction) {
+      return "Transaction is missing";
+    }
+
+    let authorization: string;
+
+    try {
+      const result = await securityApi.reauthorizeTransaction(
+        pin,
+        transaction,
+      );
+
+      if (!result.ok) {
+        if (result.reason === "locked") {
+          return `Too many attempts. Try again in ${Math.ceil(
+            result.retryAfterMs / 1000,
+          )}s.`;
+        }
+
+        return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+      }
+
+      authorization = result.authorization;
+    } catch (authorizationError) {
+      console.error("Transaction authorization failed:", authorizationError);
+
+      return authorizationError instanceof Error
+        ? authorizationError.message
+        : "Failed to authorize transaction";
+    }
+
+    try {
+      const signed = await signerApi.signNativeTransfer(
+        transaction,
+        authorization,
+      );
+
+      setReauthing(false);
+
+      setSendStatus("broadcasting");
+
+      const hash = await transactionApi.broadcastSignedTransaction(signed);
+
+      setTransactionHash(hash);
+
+      await trackedTransactionApi.trackNativeTransfer(transaction, hash);
+
+      setSendStatus("pending");
+      try {
+        const receipt = await transactionApi.waitForTransactionReceipt(hash);
+
+        setSendStatus(
+          receipt.status === "success" ? "confirmed" : "reverted",
+        );
+      } catch (receiptError) {
+        console.error("Receipt tracking failed:", receiptError);
+
+        setSendStatus("submitted");
+      }
+
+      return null;
+    } catch (submissionError) {
+      console.error("Transaction submission failed:", submissionError);
+
+      setSendStatus(null);
+
+      setReauthing(true);
+
+      return submissionError instanceof Error
+        ? submissionError.message
+        : "Failed to send transaction";
+    }
+  }
+
   if (transaction && reauthing) {
+    if (pinConfigured === null) {
+      return (
+        <Screen
+          style={{
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <ActivityIndicator color={Colors.textSecondary} />
+        </Screen>
+      );
+    }
+
+    // Кошельки, созданные до PIN-фичи: перед первой отправкой создаём PIN
+    // и тем же вводом авторизуем транзакцию.
+    if (!pinConfigured) {
+      return (
+        <PinView
+          // key: см. change-pin — setup и reauth не должны делить инстанс.
+          key="send-setup"
+          mode="setup"
+          onCancel={() => {
+            setReauthing(false);
+          }}
+          onSubmit={async (pin) => {
+            try {
+              await securityApi.setupPin(pin);
+            } catch (setupError) {
+              console.error("PIN setup failed:", setupError);
+
+              return "Failed to create PIN";
+            }
+
+            setPinConfigured(true);
+
+            return authorizeAndSend(pin);
+          }}
+        />
+      );
+    }
+
     return (
       <PinView
+        key="send-reauth"
         mode="reauth"
-        onSubmit={async (pin) => {
-          let authorization: string;
-
-          try {
-            const result = await securityApi.reauthorizeTransaction(
-              pin,
-              transaction,
-            );
-
-            if (!result.ok) {
-              if (result.reason === "locked") {
-                return `Too many attempts. Try again in ${Math.ceil(
-                  result.retryAfterMs / 1000,
-                )}s.`;
-              }
-
-              return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
-            }
-
-            authorization = result.authorization;
-          } catch (authorizationError) {
-            console.error(
-              "Transaction authorization failed:",
-              authorizationError,
-            );
-
-            return authorizationError instanceof Error
-              ? authorizationError.message
-              : "Failed to authorize transaction";
-          }
-
-          try {
-            const signed = await signerApi.signNativeTransfer(
-              transaction,
-              authorization,
-            );
-
-            setReauthing(false);
-
-            setSendStatus("broadcasting");
-
-            const hash =
-              await transactionApi.broadcastSignedTransaction(signed);
-
-            setTransactionHash(hash);
-
-            setSendStatus("pending");
-            try {
-              const receipt =
-                await transactionApi.waitForTransactionReceipt(hash);
-
-              setSendStatus(
-                receipt.status === "success" ? "confirmed" : "reverted",
-              );
-            } catch (receiptError) {
-              console.error("Receipt tracking failed:", receiptError);
-
-              setSendStatus("submitted");
-            }
-
-            return null;
-          } catch (submissionError) {
-            console.error("Transaction submission failed:", submissionError);
-
-            setSendStatus(null);
-
-            setReauthing(true);
-
-            return submissionError instanceof Error
-              ? submissionError.message
-              : "Failed to send transaction";
-          }
+        onCancel={() => {
+          setReauthing(false);
         }}
+        onSubmit={authorizeAndSend}
       />
     );
   }

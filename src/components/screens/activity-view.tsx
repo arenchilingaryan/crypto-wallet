@@ -16,6 +16,8 @@ type ActivityViewProps = {
   error: string | null;
 
   onSelect: (item: ActivityItem) => void;
+
+  onBack?: () => void;
 };
 
 function shortenAddress(address: string) {
@@ -35,9 +37,10 @@ export function ActivityView({
   loading,
   error,
   onSelect,
+  onBack,
 }: ActivityViewProps) {
   return (
-    <Screen style={styles.screen}>
+    <Screen style={styles.screen} onBack={onBack}>
       <View style={styles.header}>
         <AppText variant="heading">Activity</AppText>
       </View>

@@ -1,11 +1,16 @@
 import { useCallback, useState } from "react";
 
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import { ActivityView } from "@/components/screens/activity-view";
 
 import type { ActivityItem } from "@/core/blockchain/activity";
+
 import { getActivity } from "@/core/blockchain/getActivity";
+
+import { mergeActivity } from "@/core/blockchain/mergeActivity";
+
+import { trackedTransactionApi } from "@/platform/react-native/trackedTransactionApi";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
@@ -15,6 +20,8 @@ export default function ActivityScreen() {
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
+
+  const router = useRouter();
 
   useFocusEffect(
     useCallback(() => {
@@ -31,13 +38,15 @@ export default function ActivityScreen() {
             throw new Error("Active wallet not found");
           }
 
-          const activity = await getActivity(wallet.address);
+          const tracked = await trackedTransactionApi.refreshPending();
+
+          const chainActivity = await getActivity(wallet.address);
 
           if (!active) {
             return;
           }
 
-          setItems(activity);
+          setItems(mergeActivity(chainActivity, tracked, wallet.address));
         } catch (activityError) {
           console.error("Activity load failed:", activityError);
 
@@ -69,7 +78,13 @@ export default function ActivityScreen() {
       loading={loading}
       error={error}
       onSelect={(item) => {
-        console.log("Selected transaction:", item.hash);
+        router.push({
+          pathname: "/activity/[hash]",
+
+          params: {
+            hash: item.hash,
+          },
+        });
       }}
     />
   );

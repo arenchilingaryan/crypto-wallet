@@ -1,9 +1,9 @@
 import {
-    formatUnits,
-    getAddress,
-    isAddress,
-    type Address,
-    type Hash,
+  formatUnits,
+  getAddress,
+  isAddress,
+  type Address,
+  type Hash,
 } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
@@ -97,10 +97,6 @@ function formatTransferAmount(transfer: AlchemyTransfer): string {
 
   const decimals = parseDecimals(transfer.rawContract?.decimal);
 
-  /*
-   * Предпочитаем raw integer value,
-   * чтобы не зависеть от JS float.
-   */
   if (rawValue && decimals !== null) {
     try {
       return formatUnits(BigInt(rawValue), decimals);
@@ -258,13 +254,6 @@ export async function getActivity(
     }),
   ]);
 
-  /*
-   * Self-transfer попадёт
-   * сразу в оба запроса.
-   *
-   * uniqueId у transfer
-   * используем для dedupe.
-   */
   const transfers = new Map<string, AlchemyTransfer>();
 
   for (const transfer of [...outgoing, ...incoming]) {

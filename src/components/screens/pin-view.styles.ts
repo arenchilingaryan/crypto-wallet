@@ -1,58 +1,64 @@
 import { StyleSheet } from "react-native";
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import { Spacing } from "@/constants/theme";
 
 export const styles = StyleSheet.create({
   screen: {
-    justifyContent: "flex-start",
-  },
-
-  keyboard: {
     flex: 1,
   },
 
   content: {
-    gap: Spacing.md,
-    paddingTop: Spacing.xxl,
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.xl,
+  },
+
+  header: {
+    width: "100%",
+    alignItems: "center",
+    gap: Spacing.sm,
   },
 
   description: {
-    marginBottom: Spacing.md,
-  },
-
-  input: {
-    height: 56,
-
-    paddingHorizontal: Spacing.lg,
-
-    color: Colors.textPrimary,
-    backgroundColor: Colors.surface,
-
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-
-    fontSize: 22,
-    letterSpacing: 8,
+    maxWidth: 320,
     textAlign: "center",
   },
 
-  button: {
-    height: 52,
-
-    marginTop: Spacing.md,
-
+  pinArea: {
+    flex: 1,
+    width: "100%",
     alignItems: "center",
     justifyContent: "center",
-
-    backgroundColor: Colors.surfaceAlt,
-
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
+    gap: Spacing.xl,
   },
 
-  buttonPressed: {
-    opacity: 0.65,
+  pinBlock: {
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+
+  inactivePinBlock: {
+    opacity: 0.6,
+  },
+
+  errorContainer: {
+    minHeight: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  error: {
+    textAlign: "center",
+  },
+
+  cancelButton: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+  },
+
+  cancelButtonPressed: {
+    opacity: 0.55,
   },
 });

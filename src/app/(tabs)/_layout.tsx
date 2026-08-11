@@ -4,31 +4,14 @@ import { ActivityIcon } from "@/components/icons/activity-icon";
 import { HomeIcon } from "@/components/icons/home-icon";
 import { ReceiveIcon } from "@/components/icons/receive-icon";
 import { SettingsIcon } from "@/components/icons/settings-icon";
-
-import { Colors } from "@/constants/theme";
+import { TabBar } from "@/components/ui/tab-bar";
 
 export default function TabsLayout() {
   return (
     <Tabs
+      tabBar={(props) => <TabBar {...props} />}
       screenOptions={{
         headerShown: false,
-
-        tabBarActiveTintColor: Colors.textPrimary,
-
-        tabBarInactiveTintColor: Colors.textSecondary,
-
-        tabBarStyle: {
-          backgroundColor: Colors.surface,
-
-          borderTopColor: Colors.border,
-
-          borderTopWidth: 1,
-
-          height: 82,
-
-          paddingTop: 8,
-          paddingBottom: 18,
-        },
       }}
     >
       <Tabs.Screen

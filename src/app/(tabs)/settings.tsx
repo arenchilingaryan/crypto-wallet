@@ -1,30 +1,24 @@
-import { Pressable, View } from "react-native";
+import Constants from "expo-constants";
 
 import { useRouter } from "expo-router";
 
-import { Screen } from "@/components/ui/screen";
-import { AppText } from "@/components/ui/text";
+import { SettingsView } from "@/components/screens/settings-view";
+
+import { ACTIVE_NETWORK } from "@/constants/networks";
 
 export default function SettingsScreen() {
   const router = useRouter();
 
   return (
-    <Screen>
-      <AppText variant="heading">Settings</AppText>
-
-      <View>
-        <Pressable
-          onPress={() => {
-            router.push("/wallets");
-          }}
-        >
-          <AppText variant="bodyStrong">Wallets</AppText>
-
-          <AppText variant="caption" tone="muted">
-            Manage wallets and active account
-          </AppText>
-        </Pressable>
-      </View>
-    </Screen>
+    <SettingsView
+      networkName={ACTIVE_NETWORK.name}
+      version={Constants.expoConfig?.version ?? "1.0.0"}
+      onManageWallets={() => {
+        router.push("/wallets");
+      }}
+      onChangePin={() => {
+        router.push("/change-pin");
+      }}
+    />
   );
 }
