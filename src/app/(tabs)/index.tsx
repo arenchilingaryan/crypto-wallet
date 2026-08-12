@@ -12,6 +12,10 @@ import { Screen } from "@/components/ui/screen";
 import { Colors } from "@/constants/theme";
 
 import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
+import {
+  getPortfolioChange,
+  type PortfolioChange,
+} from "@/core/blockchain/getPortfolioChange";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
@@ -25,6 +29,7 @@ type HomeState =
   | {
       status: "ready";
       address: Address;
+      name: string;
     };
 
 export default function WalletScreen() {
@@ -36,12 +41,17 @@ export default function WalletScreen() {
 
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
+  // Суточное изменение догружается отдельно: это отдельный запрос на актив,
+  // и баланс не должен ждать его, чтобы показаться.
+  const [change, setChange] = useState<PortfolioChange | null>(null);
+
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
 
       setPortfolio(null);
       setPortfolioError(null);
+      setChange(null);
 
       void (async () => {
         try {
@@ -62,6 +72,7 @@ export default function WalletScreen() {
           setWalletState({
             status: "ready",
             address: wallet.address,
+            name: wallet.name,
           });
 
           try {
@@ -72,6 +83,12 @@ export default function WalletScreen() {
             }
 
             setPortfolio(nextPortfolio);
+
+            const nextChange = await getPortfolioChange(nextPortfolio);
+
+            if (mounted) {
+              setChange(nextChange);
+            }
           } catch (error) {
             console.error("Portfolio load failed:", error);
 
@@ -116,7 +133,9 @@ export default function WalletScreen() {
   return (
     <HomeView
       address={walletState.address}
+      walletName={walletState.name}
       portfolio={portfolio}
+      change={change}
       error={portfolioError}
     />
   );

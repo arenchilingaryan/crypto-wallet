@@ -59,6 +59,7 @@ export const Radius = {
   sm: 8,
   md: 12,
   lg: 16,
+  xl: 24,
   full: 999,
 } as const;
 
@@ -79,11 +80,26 @@ export const Fonts = Platform.select({
 
 export const TypeScale = {
   /** Hero numbers: the total balance. */
-  display: { fontSize: 40, lineHeight: 46, fontWeight: "700", letterSpacing: -0.8 },
+  display: {
+    fontSize: 40,
+    lineHeight: 46,
+    fontWeight: "700",
+    letterSpacing: -0.8,
+  },
   /** Screen titles. */
-  title: { fontSize: 26, lineHeight: 32, fontWeight: "700", letterSpacing: -0.4 },
+  title: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: "700",
+    letterSpacing: -0.4,
+  },
   /** Section headings. */
-  heading: { fontSize: 18, lineHeight: 24, fontWeight: "600", letterSpacing: -0.2 },
+  heading: {
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: "600",
+    letterSpacing: -0.2,
+  },
   body: { fontSize: 16, lineHeight: 22, fontWeight: "400" },
   bodyStrong: { fontSize: 16, lineHeight: 22, fontWeight: "600" },
   /** Form labels, buttons on the small side. */

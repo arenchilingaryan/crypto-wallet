@@ -18,6 +18,15 @@ function trackedToActivity(
     return null;
   }
 
+  // Нативный перевод — wei, всё остальное несёт свои decimals.
+  const amount =
+    transaction.assetType === "native"
+      ? formatEther(BigInt(transaction.valueWei))
+      : formatUnits(
+          BigInt(transaction.valueWei),
+          transaction.tokenDecimals ?? 18,
+        );
+
   return {
     id: `local:${transaction.hash}`,
 
@@ -31,28 +40,32 @@ function trackedToActivity(
 
     symbol: transaction.symbol,
 
-    amount:
-      transaction.assetType === "erc20"
-        ? formatUnits(
-            BigInt(transaction.valueWei),
-            transaction.tokenDecimals ?? 18,
-          )
-        : formatEther(BigInt(transaction.valueWei)),
+    amount,
 
     from: transaction.from,
 
     to: transaction.to,
 
     contractAddress:
-      transaction.assetType === "erc20"
-        ? (transaction.contractAddress ?? null)
-        : null,
+      transaction.assetType === "native"
+        ? null
+        : (transaction.contractAddress ?? null),
 
     blockNumber: transaction.blockNumber
       ? BigInt(transaction.blockNumber)
       : null,
 
     timestamp: transaction.createdAt,
+
+    symbolOut: transaction.symbolOut,
+
+    amountOut:
+      transaction.valueOutWei !== undefined
+        ? formatUnits(
+            BigInt(transaction.valueOutWei),
+            transaction.tokenOutDecimals ?? 18,
+          )
+        : undefined,
   };
 }
 

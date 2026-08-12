@@ -1,11 +1,17 @@
+import type { PreparedErc20Approve } from "@/core/transactions/erc20Approve";
+import type { PreparedErc20Revoke } from "@/core/transactions/erc20Revoke";
 import type { PreparedErc20Transfer } from "@/core/transactions/erc20Transfer";
 import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
+import type { PreparedSwap } from "@/core/transactions/swap";
 
-// Оба вида переводов авторизуются одинаково: fingerprint строится из общих
-// полей, а для ERC-20 получатель и сумма зашиты в data.
+// Все виды транзакций авторизуются одинаково: fingerprint строится из общих
+// полей, а специфика (получатель, суммы, маршрут свопа) зашита в data.
 export type AuthorizableTransaction =
   | PreparedNativeTransfer
-  | PreparedErc20Transfer;
+  | PreparedErc20Transfer
+  | PreparedErc20Approve
+  | PreparedErc20Revoke
+  | PreparedSwap;
 
 const AUTHORIZATION_TTL_MS = 30_000;
 

@@ -1,4 +1,4 @@
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 
@@ -44,15 +44,28 @@ export const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
 
+  // Без собственной высоты: строка ввода принимает высоту текста, а по
+  // вертикали её центрирует searchBox. Растянутый на всю высоту инпут
+  // прижимал плейсхолдер к верху (у RN нет вертикального центрирования
+  // текста внутри инпута фиксированной высоты).
   searchInput: {
     flex: 1,
-    height: "100%",
 
     padding: 0,
 
     color: Colors.textPrimary,
 
     fontSize: 16,
+
+    lineHeight: 20,
+
+    textAlignVertical: "center",
+
+    includeFontPadding: false,
+
+    ...Platform.select({
+      web: { outlineStyle: "solid" as const, outlineWidth: 0 },
+    }),
   },
 
   loading: {

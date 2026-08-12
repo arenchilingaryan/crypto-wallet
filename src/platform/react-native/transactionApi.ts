@@ -2,13 +2,30 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 import { keccak256, type Address, type Hash, type Hex } from "viem";
 
 import { erc20Abi } from "@/core/blockchain/erc20Abi";
+import { getApprovals } from "@/core/blockchain/getApprovals";
+import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
+import { prepareErc20Revoke } from "@/core/transactions/prepareErc20Revoke";
+import {
+  encodeSwapCalldata,
+  getUniswapDeployment,
+  quoteBestSwapRoute,
+  type SwapRoute,
+} from "@/core/blockchain/uniswap";
+import type { Erc20ApproveIntent } from "@/core/transactions/erc20Approve";
 import {
   encodeErc20Transfer,
   type Erc20TransferIntent,
 } from "@/core/transactions/erc20Transfer";
 import type { NativeTransferIntent } from "@/core/transactions/nativeTransfer";
+import { prepareErc20Approve } from "@/core/transactions/prepareErc20Approve";
 import { prepareErc20Transfer } from "@/core/transactions/prepareErc20Transfer";
 import { prepareNativeTransfer } from "@/core/transactions/prepareNativeTransfer";
+import { prepareSwap } from "@/core/transactions/prepareSwap";
+import {
+  resolveRouteAddress,
+  type SwapAssetRef,
+  type SwapIntent,
+} from "@/core/transactions/swap";
 import { getActiveWallet } from "@/core/wallet/walletStore";
 
 import { ethereumPublicClient } from "./ethereumPublicClient";
@@ -60,6 +77,59 @@ export type NativeTransferQuote = {
 
   hasSufficientBalance: boolean;
 };
+
+// Слиппедж кошелька фиксированный — 0.5%.
+export const SWAP_SLIPPAGE_BPS = 50;
+
+// Дедлайн исполнения свопа после подписи.
+const SWAP_DEADLINE_SECONDS = 15 * 60;
+
+type SwapQuoteInput = {
+  assetIn: SwapAssetRef;
+
+  assetOut: SwapAssetRef;
+
+  amountIn: bigint;
+};
+
+export type SwapQuote = {
+  route: SwapRoute;
+
+  quotedAmountOut: bigint;
+
+  minAmountOut: bigint;
+
+  ethBalanceWei: bigint;
+
+  tokenInBalance: bigint;
+
+  // ERC-20 на входе требует approve роутеру перед свопом.
+  needsApproval: boolean;
+
+  gas: bigint;
+
+  // Газ до approve оценивается квотером, не нодой — поэтому честный флаг.
+  gasIsExact: boolean;
+
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+
+  maximumNetworkFeeWei: bigint;
+
+  hasSufficientBalance: boolean;
+
+  hasSufficientEthForFee: boolean;
+};
+
+function requireDeployment() {
+  const deployment = getUniswapDeployment(ACTIVE_NETWORK.id);
+
+  if (!deployment) {
+    throw new Error(`Swaps are not supported on ${ACTIVE_NETWORK.name}`);
+  }
+
+  return deployment;
+}
 
 export const transactionApi = {
   async quoteNativeTransfer({
@@ -302,6 +372,371 @@ export const transactionApi = {
 
       hasSufficientEthForFee: maximumNetworkFeeWei <= ethBalanceWei,
     };
+  },
+
+  // Разрешение входного токена роутеру активной сети.
+  async getSwapAllowance(token: Address): Promise<bigint> {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const deployment = requireDeployment();
+
+    return ethereumPublicClient.readContract({
+      address: token,
+
+      abi: erc20Abi,
+
+      functionName: "allowance",
+
+      args: [activeWallet.address, deployment.swapRouter02],
+    });
+  },
+
+  async quoteSwap({
+    assetIn,
+    assetOut,
+    amountIn,
+  }: SwapQuoteInput): Promise<SwapQuote | null> {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const deployment = requireDeployment();
+
+    const rpcChainId = await ethereumPublicClient.getChainId();
+
+    if (rpcChainId !== ACTIVE_NETWORK.chain.id) {
+      throw new Error(`RPC network does not match ${ACTIVE_NETWORK.name}`);
+    }
+
+    const routeTokenIn = resolveRouteAddress(assetIn, deployment);
+
+    const routeTokenOut = resolveRouteAddress(assetOut, deployment);
+
+    const nativeIn = assetIn.address === null;
+
+    const [best, ethBalanceWei, tokenInBalance, allowance, fees] =
+      await Promise.all([
+        quoteBestSwapRoute(
+          ethereumPublicClient,
+          deployment,
+          routeTokenIn,
+          routeTokenOut,
+          amountIn,
+        ),
+
+        ethereumPublicClient.getBalance({
+          address: activeWallet.address,
+
+          blockTag: "pending",
+        }),
+
+        nativeIn
+          ? Promise.resolve(0n)
+          : ethereumPublicClient.readContract({
+              address: assetIn.address as Address,
+
+              abi: erc20Abi,
+
+              functionName: "balanceOf",
+
+              args: [activeWallet.address],
+            }),
+
+        nativeIn
+          ? Promise.resolve(0n)
+          : ethereumPublicClient.readContract({
+              address: assetIn.address as Address,
+
+              abi: erc20Abi,
+
+              functionName: "allowance",
+
+              args: [activeWallet.address, deployment.swapRouter02],
+            }),
+
+        ethereumPublicClient.estimateFeesPerGas(),
+      ]);
+
+    // Ни одного пула с ликвидностью — обмена нет.
+    if (!best) {
+      return null;
+    }
+
+    const minAmountOut =
+      (best.amountOut * BigInt(10_000 - SWAP_SLIPPAGE_BPS)) / 10_000n;
+
+    const needsApproval = !nativeIn && allowance < amountIn;
+
+    const hasSufficientBalance = nativeIn
+      ? amountIn < ethBalanceWei
+      : amountIn <= tokenInBalance;
+
+    // Точная оценка газа возможна, только когда транзакция исполнима
+    // прямо сейчас: хватает баланса и не ждём approve. Иначе — оценка
+    // квотера плюс накладные транзакции.
+    let gas = best.quoterGasEstimate + 80_000n;
+
+    let gasIsExact = false;
+
+    if (hasSufficientBalance && !needsApproval) {
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS,
+      );
+
+      const { data, value } = encodeSwapCalldata({
+        routeTokenIn,
+
+        routeTokenOut,
+
+        route: best.route,
+
+        recipient: activeWallet.address,
+
+        amountIn,
+
+        minAmountOut,
+
+        deadline,
+
+        nativeIn,
+
+        nativeOut: assetOut.address === null,
+
+        weth9: deployment.weth9,
+      });
+
+      try {
+        gas = await ethereumPublicClient.estimateGas({
+          account: activeWallet.address,
+
+          to: deployment.swapRouter02,
+
+          value,
+
+          data,
+        });
+
+        gasIsExact = true;
+      } catch (estimateError) {
+        console.error("Swap gas estimation failed:", estimateError);
+      }
+    }
+
+    const maximumNetworkFeeWei = gas * fees.maxFeePerGas;
+
+    const hasSufficientEthForFee = nativeIn
+      ? amountIn + maximumNetworkFeeWei <= ethBalanceWei
+      : maximumNetworkFeeWei <= ethBalanceWei;
+
+    return {
+      route: best.route,
+
+      quotedAmountOut: best.amountOut,
+
+      minAmountOut,
+
+      ethBalanceWei,
+
+      tokenInBalance,
+
+      needsApproval,
+
+      gas,
+
+      gasIsExact,
+
+      maxFeePerGas: fees.maxFeePerGas,
+
+      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+
+      maximumNetworkFeeWei,
+
+      hasSufficientBalance,
+
+      hasSufficientEthForFee,
+    };
+  },
+
+  async prepareSwap({
+    assetIn,
+    assetOut,
+    amountIn,
+    quotedAmountOut,
+    route,
+  }: SwapQuoteInput & {
+    quotedAmountOut: bigint;
+
+    route: SwapRoute;
+  }) {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const deployment = requireDeployment();
+
+    const minAmountOut =
+      (quotedAmountOut * BigInt(10_000 - SWAP_SLIPPAGE_BPS)) / 10_000n;
+
+    const intent: SwapIntent = {
+      kind: "swap",
+
+      chainId: ACTIVE_NETWORK.chain.id,
+
+      from: activeWallet.address,
+
+      assetIn,
+
+      assetOut,
+
+      amountIn,
+
+      quotedAmountOut,
+
+      minAmountOut,
+
+      slippageBps: SWAP_SLIPPAGE_BPS,
+
+      route,
+
+      deadline: BigInt(Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS),
+    };
+
+    return prepareSwap(
+      intent,
+      {
+        expectedChainId: ACTIVE_NETWORK.chain.id,
+
+        expectedFrom: activeWallet.address,
+
+        deployment,
+      },
+      ethereumPublicClient,
+    );
+  },
+
+  // Аудит разрешений: читаем матрицу токен×известный спендер одним multicall.
+  async getApprovals(assets: PortfolioAsset[]) {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    return getApprovals(
+      activeWallet.address,
+
+      assets,
+
+      ACTIVE_NETWORK.id,
+
+      ethereumPublicClient,
+    );
+  },
+
+  async prepareErc20Revoke({
+    token,
+    spender,
+    tokenSymbol,
+    spenderName,
+  }: {
+    token: Address;
+
+    spender: Address;
+
+    tokenSymbol: string;
+
+    spenderName: string;
+  }) {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    return prepareErc20Revoke(
+      {
+        kind: "erc20-revoke",
+
+        chainId: ACTIVE_NETWORK.chain.id,
+
+        from: activeWallet.address,
+
+        token,
+
+        spender,
+
+        tokenSymbol,
+
+        spenderName,
+      },
+      {
+        expectedChainId: ACTIVE_NETWORK.chain.id,
+
+        expectedFrom: activeWallet.address,
+      },
+      ethereumPublicClient,
+    );
+  },
+
+  async prepareSwapApproval({
+    token,
+    amount,
+    tokenSymbol,
+    tokenDecimals,
+  }: {
+    token: Address;
+
+    amount: bigint;
+
+    tokenSymbol: string;
+
+    tokenDecimals: number;
+  }) {
+    const activeWallet = await getActiveWallet(expoSecretStorage);
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const deployment = requireDeployment();
+
+    const intent: Erc20ApproveIntent = {
+      kind: "erc20-approve",
+
+      chainId: ACTIVE_NETWORK.chain.id,
+
+      from: activeWallet.address,
+
+      token,
+
+      spender: deployment.swapRouter02,
+
+      amount,
+
+      tokenSymbol,
+
+      tokenDecimals,
+    };
+
+    return prepareErc20Approve(
+      intent,
+      {
+        expectedChainId: ACTIVE_NETWORK.chain.id,
+
+        expectedFrom: activeWallet.address,
+
+        expectedSpender: deployment.swapRouter02,
+      },
+      ethereumPublicClient,
+    );
   },
 
   async prepareErc20Transfer({

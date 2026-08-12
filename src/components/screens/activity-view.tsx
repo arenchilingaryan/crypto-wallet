@@ -73,6 +73,13 @@ export function ActivityView({
 
           const counterparty = sent ? item.to : item.from;
 
+          const title =
+            item.assetType === "swap"
+              ? `Swapped ${item.symbol} → ${item.symbolOut ?? "?"}`
+              : item.assetType === "approve"
+                ? `Approved ${item.symbol}`
+                : `${sent ? "Sent" : "Received"} ${item.symbol}`;
+
           return (
             <Pressable
               key={item.id}
@@ -82,16 +89,16 @@ export function ActivityView({
               style={({ pressed }) => [styles.row, pressed && styles.pressed]}
             >
               <View style={styles.left}>
-                <AppText variant="bodyStrong">
-                  {sent ? "Sent" : "Received"} {item.symbol}
-                </AppText>
+                <AppText variant="bodyStrong">{title}</AppText>
 
-                {counterparty && (
-                  <AppText variant="caption" tone="muted" mono>
-                    {sent ? "To " : "From "}
-                    {shortenAddress(counterparty)}
-                  </AppText>
-                )}
+                {item.assetType !== "swap" &&
+                  item.assetType !== "approve" &&
+                  counterparty && (
+                    <AppText variant="caption" tone="muted" mono>
+                      {sent ? "To " : "From "}
+                      {shortenAddress(counterparty)}
+                    </AppText>
+                  )}
 
                 <AppText variant="caption" tone="muted">
                   {formatTime(item.timestamp)}
@@ -99,14 +106,28 @@ export function ActivityView({
               </View>
 
               <View style={styles.right}>
-                <AppText variant="bodyStrong" tabular>
-                  {sent ? "-" : "+"}
-                  {item.amount}
-                </AppText>
+                {item.assetType === "approve" ? (
+                  <AppText variant="caption" tone="secondary" tabular>
+                    for {item.amount} {item.symbol}
+                  </AppText>
+                ) : (
+                  <>
+                    <AppText variant="bodyStrong" tabular>
+                      {item.assetType === "swap" ? "-" : sent ? "-" : "+"}
+                      {item.amount}
+                    </AppText>
 
-                <AppText variant="caption" tone="secondary">
-                  {item.symbol}
-                </AppText>
+                    <AppText variant="caption" tone="secondary">
+                      {item.symbol}
+                    </AppText>
+
+                    {item.assetType === "swap" && item.amountOut && (
+                      <AppText variant="caption" tone="success" tabular>
+                        +{item.amountOut} {item.symbolOut}
+                      </AppText>
+                    )}
+                  </>
+                )}
               </View>
             </Pressable>
           );

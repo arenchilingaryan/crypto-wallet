@@ -1,9 +1,3 @@
-import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
-import { formatTokenAmount, formatUsd } from "@/utils/format";
-
-import { PriceChart } from "@/components/charts/price-chart";
-import type { AssetMarketData } from "@/core/blockchain/getAssetMarketData";
-
 import { router } from "expo-router";
 import { Pressable, View } from "react-native";
 
@@ -11,11 +5,23 @@ import { AssetIcon } from "@/components/asset-icon";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
 
+import type {
+  AssetMarketData,
+  MarketRange,
+} from "@/core/blockchain/getAssetMarketData";
+import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
+
+import { formatTokenAmount, formatUsd } from "@/utils/format";
+
+import { PriceChart } from "../ui/price-chart";
 import { styles } from "./asset-view.styles";
 
 type AssetViewProps = {
   asset: PortfolioAsset;
   marketData: AssetMarketData | null;
+  range: MarketRange;
+  marketPending: boolean;
+  onChangeRange: (range: MarketRange) => void;
   onReceive: () => void;
   onBack: () => void;
 };
@@ -23,9 +29,38 @@ type AssetViewProps = {
 export function AssetView({
   asset,
   marketData,
+  range,
+  marketPending,
+  onChangeRange,
   onReceive,
   onBack,
 }: AssetViewProps) {
+  // Portfolio spot first: the market-data price is the LAST SAMPLE of
+  // the selected window (a day old on 1M/1Y), so preferring it would
+  // make the headline price jump when switching ranges.
+  const currentPriceUsd = asset.priceUsd ?? marketData?.priceUsd ?? null;
+
+  // The series ends at the price on screen, and the percent is computed
+  // from the same pair the user sees: window start → headline price.
+  // Otherwise the label describes a number that is not displayed.
+  const seriesPoints = marketData?.points ?? [];
+
+  const chartPoints =
+    currentPriceUsd !== null && seriesPoints.length > 0
+      ? [
+          ...seriesPoints,
+          { timestamp: Date.now(), priceUsd: currentPriceUsd },
+        ]
+      : seriesPoints;
+
+  const firstPriceUsd = chartPoints[0]?.priceUsd ?? null;
+  const lastPriceUsd = chartPoints[chartPoints.length - 1]?.priceUsd ?? null;
+
+  const changePercent =
+    firstPriceUsd !== null && firstPriceUsd > 0 && lastPriceUsd !== null
+      ? ((lastPriceUsd - firstPriceUsd) / firstPriceUsd) * 100
+      : null;
+
   return (
     <Screen onBack={onBack}>
       <View style={styles.assetHeader}>
@@ -45,31 +80,24 @@ export function AssetView({
         </View>
       </View>
 
-      <View style={styles.price}>
-        <AppText variant="overline" tone="muted">
-          Price
-        </AppText>
-
-        <AppText variant="display" tone="paper" tabular>
-          {marketData ? formatUsd(marketData.priceUsd) : "—"}
-        </AppText>
-
-        {marketData?.change24hPercent !== null &&
-          marketData?.change24hPercent !== undefined && (
-            <AppText
-              variant="caption"
-              tone={marketData.change24hPercent >= 0 ? "success" : "danger"}
-              tabular
-            >
-              {marketData.change24hPercent >= 0 ? "+" : ""}
-              {marketData.change24hPercent.toFixed(2)}%{"  "}24h
-            </AppText>
-          )}
-      </View>
-
-      <View style={styles.chart}>
-        <PriceChart points={marketData?.points ?? []} />
-      </View>
+      {currentPriceUsd !== null ? (
+        <PriceChart
+          symbol={asset.symbol}
+          quoteSymbol="USD"
+          priceUsd={currentPriceUsd}
+          changePercent={changePercent}
+          points={chartPoints}
+          range={range}
+          loading={marketPending}
+          onChangeRange={onChangeRange}
+        />
+      ) : (
+        <View style={styles.chartUnavailable}>
+          <AppText variant="caption" tone="muted">
+            Market data unavailable
+          </AppText>
+        </View>
+      )}
 
       <View style={styles.actions}>
         <ActionButton label="Receive" onPress={onReceive} />
@@ -89,7 +117,6 @@ export function AssetView({
 
             router.push({
               pathname: "/send/erc20",
-
               params: {
                 contract: asset.contractAddress,
               },
@@ -97,7 +124,25 @@ export function AssetView({
           }}
         />
 
-        <ActionButton label="Swap" disabled />
+        <ActionButton
+          label="Swap"
+          onPress={() => {
+            const assetId =
+              asset.type === "native" ? "native" : asset.contractAddress;
+
+            if (!assetId) {
+              return;
+            }
+
+            // Своп открывается уже с этой монетой на стороне «You pay».
+            router.push({
+              pathname: "/swap",
+              params: {
+                from: assetId,
+              },
+            });
+          }}
+        />
       </View>
 
       <View style={styles.details}>

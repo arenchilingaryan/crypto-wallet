@@ -13,7 +13,7 @@ export type ActivityItem = {
 
   direction: ActivityDirection;
 
-  assetType: "native" | "erc20";
+  assetType: "native" | "erc20" | "swap" | "approve";
 
   symbol: string;
 
@@ -28,4 +28,9 @@ export type ActivityItem = {
   blockNumber: bigint | null;
 
   timestamp: number | null;
+
+  // Только для swap: купленная сторона.
+  symbolOut?: string;
+
+  amountOut?: string;
 };

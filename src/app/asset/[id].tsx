@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator } from "react-native";
 import { getAddress, isAddress } from "viem";
 
@@ -19,6 +19,7 @@ import { walletApi } from "@/platform/react-native/walletApi";
 import {
     getAssetMarketData,
     type AssetMarketData,
+    type MarketRange,
 } from "@/core/blockchain/getAssetMarketData";
 
 export default function AssetScreen() {
@@ -31,6 +32,17 @@ export default function AssetScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<AssetMarketData | null>(null);
+  const [range, setRange] = useState<MarketRange>("1D");
+  const [marketPending, setMarketPending] = useState(false);
+  const [networkId, setNetworkId] = useState<string | null>(null);
+
+  // Guards against a slow response for an old range landing after
+  // a newer one; only the latest request may write state.
+  const marketRequestId = useRef(0);
+
+  // The range whose data is actually on screen — failed switches
+  // revert here, never to a range the user never saw loaded.
+  const loadedRange = useRef<MarketRange | null>(null);
 
   const router = useRouter();
 
@@ -94,6 +106,8 @@ export default function AssetScreen() {
 
             balance: "0",
 
+            decimals: metadata.decimals,
+
             priceUsd: null,
 
             valueUsd: null,
@@ -110,23 +124,92 @@ export default function AssetScreen() {
       }
 
       setAsset(foundAsset);
+      setNetworkId(portfolio.networkId);
 
-      const marketData = await getAssetMarketData({
-        network: portfolio.networkId,
-        symbol: foundAsset.symbol,
-        type: foundAsset.type,
-        contractAddress: foundAsset.contractAddress,
-      });
+      // Market data failing must not take the whole screen down —
+      // the asset, balance, and actions are already loaded.
+      try {
+        const requestId = ++marketRequestId.current;
 
-      setMarketData(marketData);
+        const data = await fetchMarketData(
+          portfolio.networkId,
+          foundAsset,
+          range,
+        );
 
-      setAsset(foundAsset);
+        if (marketRequestId.current === requestId) {
+          setMarketData(data);
+
+          if (data) {
+            loadedRange.current = range;
+          }
+        }
+      } catch (marketError) {
+        console.error("Market data loading failed:", marketError);
+      }
     } catch (error) {
       console.error("Asset loading failed:", error);
 
       setError("Failed to load asset");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function fetchMarketData(
+    network: string,
+    target: PortfolioAsset,
+    nextRange: MarketRange,
+  ) {
+    return getAssetMarketData({
+      network,
+      symbol: target.symbol,
+      type: target.type,
+      contractAddress: target.contractAddress,
+      range: nextRange,
+    });
+  }
+
+  async function handleChangeRange(nextRange: MarketRange) {
+    if (nextRange === range) {
+      return;
+    }
+
+    if (!asset || !networkId) {
+      return;
+    }
+
+    setRange(nextRange);
+    setMarketPending(true);
+
+    // The chart keeps the previous series (dimmed) until the new one
+    // lands. A failure or an empty answer reverts the selection to the
+    // range whose data is on screen, so the highlight never lies.
+    const requestId = ++marketRequestId.current;
+
+    try {
+      const data = await fetchMarketData(networkId, asset, nextRange);
+
+      if (marketRequestId.current !== requestId) {
+        return;
+      }
+
+      if (data) {
+        setMarketData(data);
+        loadedRange.current = nextRange;
+      } else if (loadedRange.current) {
+        setRange(loadedRange.current);
+      }
+    } catch (error) {
+      console.error("Market data loading failed:", error);
+
+      if (marketRequestId.current === requestId && loadedRange.current) {
+        setRange(loadedRange.current);
+      }
+    } finally {
+      if (marketRequestId.current === requestId) {
+        setMarketPending(false);
+      }
     }
   }
 
@@ -187,6 +270,9 @@ export default function AssetScreen() {
       <AssetView
         asset={asset}
         marketData={marketData}
+        range={range}
+        marketPending={marketPending}
+        onChangeRange={handleChangeRange}
         onReceive={() => {
           if (!id) {
             return;

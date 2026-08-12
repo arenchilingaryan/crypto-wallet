@@ -13,6 +13,9 @@ export type PortfolioAsset = {
 
   balance: string;
 
+  /** Знаки после запятой у токена — нужны, чтобы читать сырые суммы. */
+  decimals: number;
+
   priceUsd: number | null;
 
   valueUsd: number | null;
@@ -41,14 +44,16 @@ type AlchemyToken = {
 
   tokenBalance: string;
 
+  // Alchemy отдаёт null-поля для токенов без верифицированных метаданных —
+  // на тестнетах это обычное дело.
   tokenMetadata?: {
-    decimals?: number;
+    decimals?: number | null;
 
-    logo?: string;
+    logo?: string | null;
 
-    name?: string;
+    name?: string | null;
 
-    symbol?: string;
+    symbol?: string | null;
   };
 
   tokenPrices?: {
@@ -199,6 +204,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
     balance: nativeBalance,
 
+    decimals: 18,
+
     priceUsd: nativePrice,
 
     valueUsd: nativeValueUsd,
@@ -213,7 +220,9 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
       let balance = token.tokenBalance;
 
-      if (balance.startsWith("0x") && decimals !== undefined) {
+      // null-decimals ведут себя как отсутствующие: hex-баланс не
+      // разворачивается, и актив ниже отсеивается фильтром Number(...) > 0.
+      if (balance.startsWith("0x") && typeof decimals === "number") {
         balance = formatUnits(BigInt(balance), decimals);
       }
 
@@ -234,6 +243,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
         name: token.tokenMetadata?.name ?? "Unknown token",
 
         balance,
+
+        decimals: decimals ?? 18,
 
         priceUsd,
 

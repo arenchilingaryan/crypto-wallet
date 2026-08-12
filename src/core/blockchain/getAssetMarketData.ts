@@ -8,7 +8,8 @@ export type AssetMarketPoint = {
 
 export type AssetMarketData = {
   priceUsd: number;
-  change24hPercent: number | null;
+  /** Percent change over the requested range, first point → last point. */
+  changePercent: number | null;
   points: AssetMarketPoint[];
 };
 
@@ -17,6 +18,7 @@ type GetAssetMarketDataInput = {
   type: "native" | "erc20";
   symbol: string;
   contractAddress?: Address;
+  range: MarketRange;
 };
 
 type AlchemyHistoricalPriceResponse = {
@@ -30,6 +32,25 @@ type AlchemyHistoricalPriceResponse = {
   }[];
 };
 
+// Alchemy historical prices supports exactly three intervals:
+// '5m', '1h', '1d'. Anything else is a 400.
+function getRangeConfig(range: MarketRange) {
+  switch (range) {
+    case "1H":
+      return { hours: 1, interval: "5m" };
+    case "1D":
+      return { hours: 24, interval: "1h" };
+    case "1W":
+      return { hours: 24 * 7, interval: "1h" };
+    case "1M":
+      return { hours: 24 * 30, interval: "1d" };
+    case "1Y":
+      return { hours: 24 * 365, interval: "1d" };
+  }
+}
+
+export type MarketRange = "1H" | "1D" | "1W" | "1M" | "1Y";
+
 const API_KEY = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
 
 export async function getAssetMarketData({
@@ -37,6 +58,7 @@ export async function getAssetMarketData({
   type,
   symbol,
   contractAddress,
+  range,
 }: GetAssetMarketDataInput): Promise<AssetMarketData | null> {
   if (!API_KEY) {
     throw new Error("Alchemy API key is missing");
@@ -51,9 +73,11 @@ export async function getAssetMarketData({
     throw new Error("Contract address is required for ERC20 market data");
   }
 
+  const { hours, interval } = getRangeConfig(range);
+
   const endTime = new Date();
 
-  const startTime = new Date(endTime.getTime() - 24 * 60 * 60 * 1000);
+  const startTime = new Date(endTime.getTime() - hours * 60 * 60 * 1000);
 
   const tokenIdentity =
     type === "native"
@@ -76,7 +100,7 @@ export async function getAssetMarketData({
         ...tokenIdentity,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        interval: "1h",
+        interval,
       }),
     },
   );
@@ -115,14 +139,14 @@ export async function getAssetMarketData({
   const firstPoint = points[0];
   const lastPoint = points[points.length - 1];
 
-  const change24hPercent =
+  const changePercent =
     firstPoint.priceUsd > 0
       ? ((lastPoint.priceUsd - firstPoint.priceUsd) / firstPoint.priceUsd) * 100
       : null;
 
   return {
     priceUsd: lastPoint.priceUsd,
-    change24hPercent,
+    changePercent,
     points,
   };
 }

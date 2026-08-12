@@ -3,95 +3,43 @@ import { StyleSheet } from "react-native";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 
 export const styles = StyleSheet.create({
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: Spacing.sm,
-  },
-  networkDot: {
-    width: 6,
-    height: 6,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.success,
-  },
-  balance: {
-    gap: Spacing.sm,
-    marginTop: Spacing.xxl,
-  },
-  assetsHeading: {
-    marginTop: Spacing.xxl,
-    marginBottom: Spacing.sm,
-  },
-  assetsSpinner: {
-    marginTop: Spacing.xl,
-    alignSelf: "flex-start",
-  },
-  assetDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-  },
+  // Шапка: слева кошелёк и его адрес, справа круглые кнопки.
   header: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.lg,
-    marginBottom: Spacing.xxl,
-  },
 
-  searchButton: {
-    width: 44,
-    height: 44,
-
-    alignItems: "center",
-    justifyContent: "center",
-
-    borderWidth: 1,
-    borderColor: Colors.border,
-
-    borderRadius: Radius.full,
-
-    backgroundColor: Colors.surface,
-  },
-
-  copyButton: {
-    paddingHorizontal: Spacing.md,
-
-    paddingVertical: Spacing.sm,
-
-    backgroundColor: Colors.surface,
-
-    borderWidth: 1,
-    borderColor: Colors.border,
-
-    borderRadius: Radius.full,
-  },
-
-  topRow: {
-    flexDirection: "row",
-
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
 
     gap: Spacing.md,
   },
 
-  network: {
+  identity: {
     flex: 1,
 
-    gap: 2,
+    gap: Spacing.sm,
+  },
+
+  walletButton: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    alignSelf: "flex-start",
+
+    gap: Spacing.xs,
   },
 
   headerButtons: {
+    flexDirection: "row",
+
     alignItems: "center",
 
     gap: Spacing.sm,
   },
 
   iconButton: {
-    width: 44,
-    height: 44,
+    width: 42,
+    height: 42,
 
     alignItems: "center",
     justifyContent: "center",
@@ -113,8 +61,8 @@ export const styles = StyleSheet.create({
   },
 
   copyIconButton: {
-    width: 38,
-    height: 38,
+    width: 34,
+    height: 34,
 
     alignItems: "center",
     justifyContent: "center",
@@ -125,44 +73,51 @@ export const styles = StyleSheet.create({
     borderRadius: Radius.full,
 
     backgroundColor: Colors.surface,
-  },
-
-  copyFeedback: {
-    alignSelf: "flex-end",
-
-    marginTop: 2,
   },
 
   pressed: {
     opacity: 0.6,
   },
 
-  walletActions: {
+  // Баланс — смысловой центр экрана.
+  balance: {
+    alignItems: "center",
+
+    gap: Spacing.sm,
+
+    marginTop: Spacing.xxl,
+  },
+
+  balanceValue: {
+    textAlign: "center",
+  },
+
+  // Ряд действий под балансом.
+  actions: {
     flexDirection: "row",
 
-    alignItems: "center",
+    alignItems: "flex-start",
 
-    gap: Spacing.md,
+    marginTop: Spacing.xxl,
   },
 
-  walletAction: {
-    alignItems: "center",
-
-    gap: Spacing.xs,
+  assetsHeading: {
+    marginTop: Spacing.xxl,
+    marginBottom: Spacing.sm,
   },
 
-  walletActionIcon: {
-    width: 48,
-    height: 48,
+  assetsSpinner: {
+    marginTop: Spacing.xl,
+    alignSelf: "center",
+  },
 
-    alignItems: "center",
-    justifyContent: "center",
+  assetDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
 
-    borderWidth: 1,
-    borderColor: Colors.border,
-
-    borderRadius: Radius.full,
-
-    backgroundColor: Colors.surface,
+  // Хвост списка: чтобы последняя строка не липла к доку.
+  listFooter: {
+    height: Spacing.xl,
   },
 });

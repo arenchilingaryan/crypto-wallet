@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { useFocusEffect, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
@@ -12,7 +12,9 @@ import { searchAssets } from "@/core/blockchain/searchAssets";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
-export default function ReceiveScreen() {
+// Выбор актива для отправки: с главного экрана Send ведёт сюда, а отсюда —
+// в готовую форму (native или erc20).
+export default function SendAssetPickerScreen() {
   const router = useRouter();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -27,54 +29,49 @@ export default function ReceiveScreen() {
 
   const requestId = useRef(0);
 
-  // Таб живёт всё время жизни навигатора, поэтому портфель перечитываем
-  // на каждом фокусе — иначе после смены активного кошелька здесь
-  // остаются активы предыдущего.
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
+  useEffect(() => {
+    let active = true;
 
-      void (async () => {
-        try {
-          setLoading(true);
-          setError(null);
+    void (async () => {
+      try {
+        setLoading(true);
+        setError(null);
 
-          const wallet = await walletApi.load();
+        const wallet = await walletApi.load();
 
-          if (!wallet) {
-            throw new Error("Active wallet not found");
-          }
-
-          const nextPortfolio = await getPortfolio(wallet.address);
-
-          if (!active) {
-            return;
-          }
-
-          setPortfolio(nextPortfolio);
-        } catch (bootstrapError) {
-          console.error("Receive bootstrap failed:", bootstrapError);
-
-          if (!active) {
-            return;
-          }
-
-          setError(
-            bootstrapError instanceof Error
-              ? bootstrapError.message
-              : "Failed to load assets",
-          );
-
-          setResults([]);
-          setLoading(false);
+        if (!wallet) {
+          throw new Error("Active wallet not found");
         }
-      })();
 
-      return () => {
-        active = false;
-      };
-    }, []),
-  );
+        const nextPortfolio = await getPortfolio(wallet.address);
+
+        if (!active) {
+          return;
+        }
+
+        setPortfolio(nextPortfolio);
+      } catch (bootstrapError) {
+        console.error("Send bootstrap failed:", bootstrapError);
+
+        if (!active) {
+          return;
+        }
+
+        setError(
+          bootstrapError instanceof Error
+            ? bootstrapError.message
+            : "Failed to load assets",
+        );
+
+        setResults([]);
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!portfolio) {
@@ -90,27 +87,26 @@ export default function ReceiveScreen() {
     const timer = setTimeout(() => {
       setLoading(true);
 
+      // Отправлять можно только то, что лежит в кошельке.
       void searchAssets(portfolio, query)
         .then((nextResults) => {
           if (currentRequest !== requestId.current) {
             return;
           }
 
-          setResults(nextResults);
+          setResults(nextResults.filter((item) => item.source !== "network"));
         })
         .catch((searchError) => {
           if (currentRequest !== requestId.current) {
             return;
           }
 
-          console.error("Receive asset search failed:", searchError);
+          console.error("Send asset search failed:", searchError);
 
           setResults([]);
 
           setError(
-            searchError instanceof Error
-              ? searchError.message
-              : "Search failed",
+            searchError instanceof Error ? searchError.message : "Search failed",
           );
         })
         .finally(() => {
@@ -129,28 +125,31 @@ export default function ReceiveScreen() {
 
   return (
     <AssetPickerView
-      title="Receive"
+      title="Send"
       query={query}
       results={results}
       loading={loading}
       error={error}
       onChangeQuery={setQuery}
       onBack={() => {
-        router.replace("/");
+        router.back();
       }}
       onSelect={(asset) => {
-        const assetId =
-          asset.type === "native" ? "native" : asset.contractAddress;
+        if (asset.type === "native") {
+          router.push("/send/native");
 
-        if (!assetId) {
+          return;
+        }
+
+        if (!asset.contractAddress) {
           return;
         }
 
         router.push({
-          pathname: "/receive/[id]",
+          pathname: "/send/erc20",
 
           params: {
-            id: assetId,
+            contract: asset.contractAddress,
           },
         });
       }}

@@ -5,9 +5,9 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 
 import { ActivityIcon } from "@/components/icons/activity-icon";
+import { ExploreIcon } from "@/components/icons/explore-icon";
 import { HomeIcon } from "@/components/icons/home-icon";
-import { ReceiveIcon } from "@/components/icons/receive-icon";
-import { SwapIcon } from "@/components/icons/swap-icon";
+import { ShieldIcon } from "@/components/icons/shield-icon";
 
 import { TabBar } from "@/components/ui/tab-bar";
 
@@ -67,6 +67,9 @@ export default function TabsLayout() {
     return <Redirect href="/onboarding" />;
   }
 
+  // Вкладки — только разделы, в которые возвращаются. Send/Receive/Swap
+  // это задачи с началом и концом: они живут быстрыми действиями на
+  // главной и стековыми роутами, чтобы экран размонтировался после выхода.
   return (
     <Tabs
       tabBar={(props) => <TabBar {...props} />}
@@ -83,6 +86,14 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
+        name="explore"
+        options={{
+          title: "Explore",
+          tabBarIcon: ({ color }) => <ExploreIcon size={22} color={color} />,
+        }}
+      />
+
+      <Tabs.Screen
         name="activity"
         options={{
           title: "Activity",
@@ -91,18 +102,10 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
-        name="receive"
+        name="security"
         options={{
-          title: "Receive",
-          tabBarIcon: ({ color }) => <ReceiveIcon size={22} color={color} />,
-        }}
-      />
-
-      <Tabs.Screen
-        name="swap"
-        options={{
-          title: "Swap",
-          tabBarIcon: ({ color }) => <SwapIcon size={22} color={color} />,
+          title: "Security",
+          tabBarIcon: ({ color }) => <ShieldIcon size={22} color={color} />,
         }}
       />
     </Tabs>

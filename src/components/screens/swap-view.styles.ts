@@ -1,6 +1,6 @@
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import { Colors, Radius, Spacing, TypeScale } from "@/constants/theme";
 
 export const styles = StyleSheet.create({
   heading: {
@@ -41,6 +41,9 @@ export const styles = StyleSheet.create({
     paddingRight: Spacing.sm,
 
     borderRadius: Radius.full,
+
+    // Кнопка выбора не отдаёт своё место колонке суммы.
+    flexShrink: 0,
   },
 
   tokenSelectorPressed: {
@@ -51,12 +54,41 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
+  // Колонка суммы занимает остаток ряда и не выпускает ввод за свои
+  // границы — иначе на web прозрачный TextInput наезжает на селектор
+  // токена и перехватывает клики.
   amount: {
+    flex: 1,
+
+    minWidth: 0,
+
     alignItems: "flex-end",
 
     gap: 2,
+  },
 
-    flexShrink: 1,
+  // Ввод суммы визуально совпадает с текстовым вариантом (title/paper).
+  // Гашение веб-аутлайна — тот же приём, что в ui/input.styles.
+  amountInput: {
+    ...TypeScale.title,
+
+    color: Colors.paper,
+
+    textAlign: "right",
+
+    width: "100%",
+
+    padding: 0,
+
+    fontVariant: ["tabular-nums"],
+
+    ...Platform.select({
+      web: { outlineStyle: "solid" as const, outlineWidth: 0 },
+    }),
+  },
+
+  error: {
+    marginTop: Spacing.md,
   },
 
   // Кнопка-переворот между картами; слегка наезжает на обе.

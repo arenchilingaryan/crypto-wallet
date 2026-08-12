@@ -40,4 +40,10 @@ export const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: 2,
   },
+  // Вторая строка справа: стоимость и её изменение за сутки.
+  valueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
 });

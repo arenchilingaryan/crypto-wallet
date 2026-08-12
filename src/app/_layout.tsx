@@ -121,6 +121,10 @@ export default function RootLayout() {
 
       <Stack.Screen name="receive/[id]" />
 
+      <Stack.Screen name="swap" />
+
+      <Stack.Screen name="send/index" />
+
       <Stack.Screen name="send/native" />
 
       <Stack.Screen name="send/erc20" />

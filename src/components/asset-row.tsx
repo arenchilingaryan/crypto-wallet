@@ -9,10 +9,16 @@ import { AppText } from "./ui/text";
 
 type AssetRowProps = {
   asset: PortfolioAsset;
+  /** Изменение цены за сутки; null — данных нет. */
+  changePercent?: number | null;
   onPress?: () => void;
 };
 
-export function AssetRow({ asset, onPress }: AssetRowProps) {
+export function AssetRow({
+  asset,
+  changePercent = null,
+  onPress,
+}: AssetRowProps) {
   return (
     <Pressable
       onPress={onPress}
@@ -39,9 +45,22 @@ export function AssetRow({ asset, onPress }: AssetRowProps) {
           {formatTokenAmount(asset.balance)}
         </AppText>
 
-        <AppText variant="caption" tone="muted" tabular>
-          {asset.valueUsd !== null ? formatUsd(asset.valueUsd) : "—"}
-        </AppText>
+        <View style={styles.valueRow}>
+          <AppText variant="caption" tone="muted" tabular>
+            {asset.valueUsd !== null ? formatUsd(asset.valueUsd) : "—"}
+          </AppText>
+
+          {changePercent !== null && Number.isFinite(changePercent) && (
+            <AppText
+              variant="caption"
+              tone={changePercent >= 0 ? "success" : "danger"}
+              tabular
+            >
+              {changePercent >= 0 ? "+" : ""}
+              {changePercent.toFixed(2)}%
+            </AppText>
+          )}
+        </View>
       </View>
     </Pressable>
   );

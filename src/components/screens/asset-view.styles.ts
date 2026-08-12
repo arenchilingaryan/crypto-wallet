@@ -23,6 +23,12 @@ export const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
 
+  chartUnavailable: {
+    minHeight: 260,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   logo: {
     width: "100%",
     height: "100%",
