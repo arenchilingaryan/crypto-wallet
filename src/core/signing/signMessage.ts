@@ -1,8 +1,9 @@
 import type { Address, Hex } from "viem";
 
-import type { SecretStorage } from "@/core/wallet/ports/secretStorage";
+import type { WalletSigner } from "@/core/ports/walletSigner";
+import { assertSessionUnlocked } from "@/core/security/sessionLock";
 
-import { getActiveSigningAccount } from "./getActiveSigningAccount";
+import { signMessageAndVerify } from "./signAndVerify";
 
 type SignMessageInput = {
   message: string;
@@ -15,20 +16,20 @@ export type SignedMessage = {
 
 export async function signMessage(
   { message }: SignMessageInput,
-  storage: SecretStorage,
+  signer: WalletSigner,
 ): Promise<SignedMessage> {
+  assertSessionUnlocked();
+
   if (!message.trim()) {
     throw new Error("Message cannot be empty");
   }
 
-  const account = await getActiveSigningAccount(storage);
+  const address = await signer.getAddress();
 
-  const signature = await account.signMessage({
-    message,
-  });
+  const signature = await signMessageAndVerify(signer, message, address);
 
   return {
-    address: account.address,
+    address,
     signature,
   };
 }

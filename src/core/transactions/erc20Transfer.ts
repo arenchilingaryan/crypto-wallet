@@ -18,13 +18,10 @@ export type Erc20TransferIntent = {
 
   from: Address;
 
-  // Контракт токена.
   token: Address;
 
-  // Человеческий получатель токенов.
   recipient: Address;
 
-  // Сырые единицы токена (уже умноженные на decimals).
   amount: bigint;
 
   tokenSymbol: string;
@@ -40,10 +37,8 @@ export type PreparedErc20Transfer = {
 
   from: Address;
 
-  // Транзакция идёт НА контракт токена.
   to: Address;
 
-  // ETH при этом не переводится.
   value: bigint;
 
   token: Address;
@@ -63,7 +58,6 @@ export type PreparedErc20Transfer = {
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
 
-  // transfer(recipient, amount).
   data: Hex;
 };
 
@@ -74,10 +68,8 @@ export type Erc20TransferValidationContext = {
 
 export type PreparedErc20TransferValidationContext =
   Erc20TransferValidationContext & {
-    // ETH — на комиссию.
     balanceWei: bigint;
 
-    // Баланс самого токена.
     tokenBalance: bigint;
   };
 
@@ -261,7 +253,6 @@ export function validatePreparedErc20TransferForSigning(
     "Invalid transaction target",
   );
 
-  // Цель транзакции обязана быть контрактом токена.
   if (to.toLowerCase() !== validatedIntent.token.toLowerCase()) {
     throw new TransactionValidationError(
       "INVALID_TO",
@@ -269,7 +260,6 @@ export function validatePreparedErc20TransferForSigning(
     );
   }
 
-  // ETH в токен-переводе не двигается.
   if (transaction.value !== 0n) {
     throw new TransactionValidationError(
       "INVALID_VALUE",
@@ -277,8 +267,6 @@ export function validatePreparedErc20TransferForSigning(
     );
   }
 
-  // Integrity check: calldata обязана в точности кодировать
-  // transfer(recipient, amount) — никакой подмены после подготовки.
   const expectedData = encodeErc20Transfer(
     validatedIntent.recipient,
     validatedIntent.amount,

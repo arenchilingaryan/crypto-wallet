@@ -1,6 +1,6 @@
-import type { SecretStorage } from "../../core/wallet/ports/secretStorage";
+import type { KeyValueStorage } from "../../core/ports/keyValueStorage";
 
-export const expoSecretStorage: SecretStorage = {
+export const expoKeyValueStorage: KeyValueStorage = {
   async get(key) {
     return localStorage.getItem(key);
   },

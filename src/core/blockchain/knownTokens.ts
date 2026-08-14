@@ -1,12 +1,5 @@
 import { getAddress, type Address } from "viem";
 
-// Курируемый реестр токенов для сетей без индексатора имён.
-//
-// На тестнетах нет реестра токенов: задеплоить «USDC» может кто угодно,
-// а текстовый поиск GeckoTerminal живёт на DEX-пулах, которых на Sepolia
-// практически нет. Поэтому поиск по символу/имени на тестнете работает
-// по этому списку официальных деплоев. Каждый адрес проверен через
-// alchemy_getTokenMetadata (символ и decimals совпадают с ончейном).
 export type KnownToken = {
   address: Address;
 
@@ -19,8 +12,6 @@ export type KnownToken = {
   logo: string | null;
 };
 
-// Логотипы — брендовые картинки тех же токенов из реестра Trust Wallet
-// (по мейннет-адресу бренда): тестовые деплои своих картинок не имеют.
 function trustWalletLogo(mainnetAddress: string): string {
   return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/${mainnetAddress}/logo.png`;
 }
@@ -71,7 +62,6 @@ const KNOWN_TOKENS: Record<string, KnownToken[]> = {
     },
   ],
 
-  // Мейннет ищется по имени через GeckoTerminal — список не нужен.
   "eth-mainnet": [],
 };
 

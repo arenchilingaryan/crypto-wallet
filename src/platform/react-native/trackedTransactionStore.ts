@@ -30,55 +30,74 @@ async function writeAll(transactions: TrackedTransaction[]) {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
 }
 
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+function serializeWrite<T>(task: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(task, task);
+
+  writeQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
+}
+
 export async function listTrackedTransactions() {
   return readAll();
 }
 
 export async function saveTrackedTransaction(transaction: TrackedTransaction) {
-  const current = await readAll();
+  return serializeWrite(async () => {
+    const current = await readAll();
 
-  const next = current.filter(
-    (item) => item.hash.toLowerCase() !== transaction.hash.toLowerCase(),
-  );
+    const next = current.filter(
+      (item) => item.hash.toLowerCase() !== transaction.hash.toLowerCase(),
+    );
 
-  next.unshift(transaction);
+    next.unshift(transaction);
 
-  await writeAll(next);
+    await writeAll(next);
 
-  return transaction;
+    return transaction;
+  });
 }
 
 export async function updateTrackedTransaction(
   hash: Hash,
   update: Partial<TrackedTransaction>,
 ) {
-  const current = await readAll();
+  return serializeWrite(async () => {
+    const current = await readAll();
 
-  const next = current.map((transaction) => {
-    if (transaction.hash.toLowerCase() !== hash.toLowerCase()) {
-      return transaction;
-    }
+    const next = current.map((transaction) => {
+      if (transaction.hash.toLowerCase() !== hash.toLowerCase()) {
+        return transaction;
+      }
 
-    return {
-      ...transaction,
-      ...update,
-      hash: transaction.hash,
+      return {
+        ...transaction,
+        ...update,
+        hash: transaction.hash,
 
-      version: transaction.version,
-    };
+        version: transaction.version,
+      };
+    });
+
+    await writeAll(next);
   });
-
-  await writeAll(next);
 }
 
 export async function removeTrackedTransaction(hash: Hash) {
-  const current = await readAll();
+  return serializeWrite(async () => {
+    const current = await readAll();
 
-  const next = current.filter(
-    (transaction) => transaction.hash.toLowerCase() !== hash.toLowerCase(),
-  );
+    const next = current.filter(
+      (transaction) => transaction.hash.toLowerCase() !== hash.toLowerCase(),
+    );
 
-  await writeAll(next);
+    await writeAll(next);
+  });
 }
 
 export async function getTrackedTransaction(

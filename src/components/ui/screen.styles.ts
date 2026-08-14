@@ -12,6 +12,11 @@ export const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    width: "100%",
+    maxWidth: MaxContentWidth,
+    alignSelf: "center",
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
   },
   backRow: {
     width: "100%",

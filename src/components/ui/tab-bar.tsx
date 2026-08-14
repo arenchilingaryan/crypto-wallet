@@ -25,7 +25,6 @@ type TabItemProps = {
 };
 
 function TabItem({ focused, label, icon, onPress }: TabItemProps) {
-  // Пружина на ширину: активная вкладка плавно отбирает место у соседей.
   const growStyle = useAnimatedStyle(() => {
     return {
       flexGrow: withSpring(focused ? 2 : 1, {
@@ -72,12 +71,6 @@ function TabItem({ focused, label, icon, onPress }: TabItemProps) {
   );
 }
 
-/**
- * Плавающий док вместо системной полосы: активная вкладка — пилюля
- * с иконкой и подписью, неактивные — только приглушённые иконки.
- * Переключение анимировано: пружина по ширине, фейд подложки и подписи.
- * Бар остаётся в потоке (не absolute), поэтому контент под него не уезжает.
- */
 export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
 

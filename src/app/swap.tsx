@@ -15,6 +15,12 @@ import { SwapView, type SwapSide } from "@/components/screens/swap-view";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
+import { getUniswapDeployment } from "@/core/blockchain/uniswap";
+import { foldPolicyDecision } from "@/core/security/policyDecision";
+import type { SecurityReview } from "@/core/security/securityReview";
+
+import { policyApi } from "@/platform/react-native/policyApi";
+
 import type { AssetSearchResult } from "@/core/blockchain/assetSearch";
 import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
 import { getTokenMetadata } from "@/core/blockchain/getTokenMetadata";
@@ -30,16 +36,19 @@ import {
   parseTokenAmountInput,
 } from "@/core/transactions/tokenAmountInput";
 
+import { describePinFailure } from "@/core/security/pin";
+
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
 import { trackedTransactionApi } from "@/platform/react-native/trackedTransactionApi";
 import {
   transactionApi,
+  SWAP_DEADLINE_MINUTES,
+  SWAP_SLIPPAGE_BPS,
   type SwapQuote,
 } from "@/platform/react-native/transactionApi";
 import { walletApi } from "@/platform/react-native/walletApi";
 
-// Выбранная сторона обмена: роутинговая ссылка + всё для отображения.
 type SelectedAsset = {
   ref: SwapAssetRef;
 
@@ -50,7 +59,6 @@ type SelectedAsset = {
 
 type PickerTarget = "pay" | "receive" | null;
 
-// Какую транзакцию сейчас ведём через PIN/статус: разрешение или сам своп.
 type SubmitPhase =
   | { kind: "approve"; transaction: PreparedErc20Approve }
   | { kind: "swap"; transaction: PreparedSwap };
@@ -77,8 +85,6 @@ function sameAsset(a: SwapAssetRef, b: SwapAssetRef) {
   return left === right;
 }
 
-// Монета из параметра маршрута: сперва портфель (там есть логотип и имя),
-// затем метаданные контракта.
 async function resolveAsset(
   assetId: string,
   portfolio: Portfolio | null,
@@ -147,8 +153,6 @@ function findPortfolioBalance(
 }
 
 export default function SwapScreen() {
-  // Экран актива открывает своп уже с выбранной монетой: "native" либо
-  // адрес контракта.
   const { from } = useLocalSearchParams<{ from?: string }>();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -167,9 +171,10 @@ export default function SwapScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
+  const [review, setReview] = useState<SecurityReview | null>(null);
+
   const [loading, setLoading] = useState(false);
 
-  // Пикер токена поверх формы.
   const [picker, setPicker] = useState<PickerTarget>(null);
 
   const [pickerQuery, setPickerQuery] = useState("");
@@ -180,7 +185,6 @@ export default function SwapScreen() {
 
   const [pickerError, setPickerError] = useState<string | null>(null);
 
-  // Текущая подтверждаемая транзакция (превью → PIN → статус).
   const [submitPhase, setSubmitPhase] = useState<SubmitPhase | null>(null);
 
   const [reauthing, setReauthing] = useState(false);
@@ -191,8 +195,6 @@ export default function SwapScreen() {
 
   const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
 
-  // Инкремент форсирует перекотировку при том же вводе — например,
-  // после подтверждённого approve, когда allowance изменился ончейн.
   const [requoteNonce, setRequoteNonce] = useState(0);
 
   const quoteRequestId = useRef(0);
@@ -233,8 +235,6 @@ export default function SwapScreen() {
     };
   }, []);
 
-  // Предвыбор монеты из параметра маршрута. Таб живёт постоянно, поэтому
-  // сбрасываем сумму и котировку — иначе к новой паре прилипнет старый ввод.
   useEffect(() => {
     if (!from) {
       return;
@@ -266,8 +266,6 @@ export default function SwapScreen() {
     };
   }, [from, portfolio]);
 
-  // Котировка: перезапрашивается на каждое изменение пары/суммы,
-  // с дебаунсом и отсечкой устаревших ответов — как в send/erc20.
   useEffect(() => {
     setQuote(null);
 
@@ -372,8 +370,6 @@ export default function SwapScreen() {
     };
   }, [payAsset, receiveAsset, amount, requoteNonce]);
 
-  // Поиск в пикере: платёжная сторона — только активы кошелька,
-  // получаемая — кошелёк плюс сеть.
   useEffect(() => {
     if (!picker || !portfolio) {
       return;
@@ -514,11 +510,35 @@ export default function SwapScreen() {
       setLoading(true);
       setError(null);
 
-      // ERC-20 на входе без разрешения: сперва approve, свопом займёмся
-      // после его подтверждения.
       if (quote.needsApproval) {
         if (payAsset.ref.address === null) {
           throw new Error("Native ETH does not need an approval");
+        }
+
+        const approvalVerdict = await policyApi.checkApproval({
+          spender: getUniswapDeployment(ACTIVE_NETWORK.id)!.swapRouter02,
+
+          token: payAsset.ref.address,
+
+          amountRaw: parsedAmount,
+
+          decimals: payAsset.ref.decimals,
+
+          tokenSymbol: payAsset.ref.symbol,
+
+          unlimited: false,
+        });
+
+        setReview(approvalVerdict);
+
+        const approvalBlocked = foldPolicyDecision(approvalVerdict.decision, {
+          allow: () => null,
+          uncovered: () => null,
+          block: (decision) => decision.message,
+        });
+
+        if (approvalBlocked !== null) {
+          return;
         }
 
         const approval = await transactionApi.prepareSwapApproval({
@@ -536,6 +556,42 @@ export default function SwapScreen() {
           transaction: approval,
         });
 
+        return;
+      }
+
+      const swapVerdict = await policyApi.checkSwap({
+        amountIn: formatUnits(parsedAmount, payAsset.ref.decimals),
+
+        symbolIn: payAsset.ref.symbol,
+
+        minAmountOut: formatUnits(
+          quote.minAmountOut,
+          receiveAsset.ref.decimals,
+        ),
+
+        symbolOut: receiveAsset.ref.symbol,
+
+        slippagePercent: `${(SWAP_SLIPPAGE_BPS / 100).toFixed(2)}%`,
+
+        deadlineMinutes: SWAP_DEADLINE_MINUTES,
+
+        routerKnown: getUniswapDeployment(ACTIVE_NETWORK.id) !== null,
+
+        routeLabel:
+          quote.route.kind === "single"
+            ? "Uniswap V3, direct pool"
+            : "Uniswap V3, via WETH",
+      });
+
+      setReview(swapVerdict);
+
+      const swapBlocked = foldPolicyDecision(swapVerdict.decision, {
+        allow: () => null,
+        uncovered: () => null,
+        block: (decision) => decision.message,
+      });
+
+      if (swapBlocked !== null) {
         return;
       }
 
@@ -589,13 +645,9 @@ export default function SwapScreen() {
       );
 
       if (!result.ok) {
-        if (result.reason === "locked") {
-          return `Too many attempts. Try again in ${Math.ceil(
-            result.retryAfterMs / 1000,
-          )}s.`;
-        }
-
-        return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+        return result.reason === "outflow-reserved"
+          ? result.message
+          : describePinFailure(result);
       }
 
       authorization = result.authorization;
@@ -645,8 +697,6 @@ export default function SwapScreen() {
         }
 
         if (submitPhase.kind === "approve") {
-          // Разрешение подтверждено: возвращаемся к форме и котируем
-          // заново — allowance изменился, дальше кнопка поведёт в своп.
           resetSubmitFlow();
 
           setRequoteNonce((nonce) => nonce + 1);
@@ -674,8 +724,6 @@ export default function SwapScreen() {
         : "Failed to send transaction";
     }
   }
-
-  // --- Рендер фаз ---
 
   if (picker) {
     return (
@@ -760,6 +808,7 @@ export default function SwapScreen() {
     return (
       <SwapPreviewView
         preview={preview}
+        review={review}
         onBack={resetSubmitFlow}
         onConfirm={() => {
           setReauthing(true);
@@ -834,6 +883,7 @@ export default function SwapScreen() {
   return (
     <SwapView
       pay={paySide}
+      review={review}
       receive={receiveSide}
       rate={rate}
       networkFee={networkFee}

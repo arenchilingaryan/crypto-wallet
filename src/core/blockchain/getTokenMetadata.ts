@@ -2,6 +2,8 @@ import { getAddress, isAddress, type Address } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
+import { getDataApiKey } from "@/core/config/runtimeConfig";
+
 export type TokenMetadata = {
   address: Address;
   name: string;
@@ -9,8 +11,6 @@ export type TokenMetadata = {
   decimals: number;
   logo: string | null;
 };
-
-const API_KEY = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
 
 type AlchemyResponse = {
   result?: {
@@ -28,6 +28,8 @@ type AlchemyResponse = {
 export async function getTokenMetadata(
   contractAddress: string,
 ): Promise<TokenMetadata | null> {
+  const API_KEY = getDataApiKey();
+
   if (!API_KEY) {
     throw new Error("Alchemy API key is missing");
   }

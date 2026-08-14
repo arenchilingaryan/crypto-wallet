@@ -103,7 +103,6 @@ export function ExploreView({
         })}
       </View>
 
-      {/* Списки строятся по обороту DEX-пулов, а не по репутации токена. */}
       <AppText variant="caption" tone="muted" style={styles.notice}>
         Ranked by DEX pool activity. Check liquidity and pool age before
         trading — anyone can create a pool.

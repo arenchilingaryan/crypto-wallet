@@ -1,13 +1,18 @@
 import { Pressable, TextInput, View } from "react-native";
 
+import { SecurityBriefing } from "@/components/security/security-briefing";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+
+import type { SecurityReview } from "@/core/security/securityReview";
 
 import { styles } from "./send-native-view.styles";
 
 type SendNativeViewProps = {
   to: string;
   amount: string;
+
+  review: SecurityReview | null;
 
   error: string | null;
   loading: boolean;
@@ -31,6 +36,7 @@ type SendNativeViewProps = {
 export function SendNativeView({
   to,
   amount,
+  review,
   error,
   loading,
 
@@ -144,6 +150,10 @@ export function SendNativeView({
           )}
         </View>
 
+        {review && review.decision.decision === "block" && (
+          <SecurityBriefing review={review} />
+        )}
+
         {error && (
           <AppText variant="caption" tone="danger">
             {error}
@@ -151,16 +161,20 @@ export function SendNativeView({
         )}
 
         <Pressable
-          disabled={loading}
+          disabled={loading || !canContinue}
           onPress={onContinue}
           style={({ pressed }) => [
             styles.continueButton,
             pressed && styles.pressed,
-            loading && styles.disabled,
+            (loading || !canContinue) && styles.disabled,
           ]}
         >
           <AppText variant="label">
-            {loading ? "Preparing…" : "Continue"}
+            {loading
+              ? "Checking this transfer…"
+              : review?.decision.decision === "block"
+                ? "This wallet will not sign this"
+                : "Continue"}
           </AppText>
         </Pressable>
       </View>

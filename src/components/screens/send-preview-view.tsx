@@ -1,7 +1,10 @@
 import { Pressable, View } from "react-native";
 
+import { SecurityBriefing } from "@/components/security/security-briefing";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+
+import type { SecurityReview } from "@/core/security/securityReview";
 import type { Erc20TransferPreview } from "@/core/transactions/createErc20TransferPreview";
 import type { NativeTransferPreview } from "@/core/transactions/createNativeTransferPreview";
 import { shortenAddress } from "@/utils/format";
@@ -11,20 +14,23 @@ import { styles } from "./send-preview-view.styles";
 type SendPreviewViewProps = {
   preview: NativeTransferPreview | Erc20TransferPreview;
 
+  review: SecurityReview | null;
+
   onBack: () => void;
 
-  // Подключим к re-auth
-  // следующим шагом.
   onConfirm: () => void;
 };
 
 export function SendPreviewView({
   preview,
+  review,
   onBack,
   onConfirm,
 }: SendPreviewViewProps) {
+  const blocked = review?.decision.decision === "block";
+
   return (
-    <Screen>
+    <Screen scroll>
       <View style={styles.header}>
         <Pressable
           onPress={onBack}
@@ -84,18 +90,24 @@ export function SendPreviewView({
         )}
       </View>
 
+      {review && <SecurityBriefing review={review} />}
+
       <AppText variant="caption" tone="muted" style={styles.notice}>
         Review the recipient, network and amount before continuing.
       </AppText>
 
       <Pressable
+        disabled={blocked}
         onPress={onConfirm}
         style={({ pressed }) => [
           styles.confirmButton,
           pressed && styles.pressed,
+          blocked && styles.disabled,
         ]}
       >
-        <AppText variant="label">Confirm</AppText>
+        <AppText variant="label">
+          {blocked ? "This wallet will not sign this" : "Confirm"}
+        </AppText>
       </Pressable>
     </Screen>
   );

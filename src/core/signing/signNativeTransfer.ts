@@ -8,9 +8,12 @@ import {
     validatePreparedNativeTransferForSigning,
 } from "@/core/transactions/nativeTransfer";
 
-import type { SecretStorage } from "@/core/wallet/ports/secretStorage";
+import type {
+  SignableTransaction,
+  WalletSigner,
+} from "@/core/ports/walletSigner";
 
-import { getActiveSigningAccount } from "./getActiveSigningAccount";
+import { signAndVerify } from "./signAndVerify";
 
 type SignNativeTransferInput = {
   transaction: PreparedNativeTransfer;
@@ -22,24 +25,26 @@ type SignNativeTransferInput = {
 
 export async function signNativeTransfer(
   { transaction, authorization, expectedChainId }: SignNativeTransferInput,
-  storage: SecretStorage,
+  signer: WalletSigner,
 ): Promise<Hex> {
   assertSessionUnlocked();
 
   consumeTransactionAuthorization(transaction, authorization);
 
-  const account = await getActiveSigningAccount(storage);
+  const address = await signer.getAddress();
 
   const validated = validatePreparedNativeTransferForSigning(transaction, {
     expectedChainId,
 
-    expectedFrom: account.address,
+    expectedFrom: address,
   });
 
-  const signedTransaction = await account.signTransaction({
+  const payload: SignableTransaction = {
     type: "eip1559",
 
     chainId: validated.chainId,
+
+    from: validated.from,
 
     to: validated.to,
 
@@ -54,7 +59,7 @@ export async function signNativeTransfer(
     maxPriorityFeePerGas: validated.maxPriorityFeePerGas,
 
     data: validated.data,
-  });
+  };
 
-  return signedTransaction;
+  return signAndVerify(signer, payload);
 }

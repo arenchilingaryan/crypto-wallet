@@ -2,13 +2,6 @@ import { getAddress, isAddress, type Address } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
-/**
- * Рынок токенов активной сети по данным DEX-пулов (GeckoTerminal).
- *
- * Витрина трендов на mainnet по построению выносит наверх свежие пулы,
- * поэтому вместе с ценой всегда отдаём ликвидность, оборот и возраст пула:
- * без них список превращается в рекомендацию покупать что попало.
- */
 export type MarketToken = {
   address: Address;
 
@@ -26,7 +19,6 @@ export type MarketToken = {
 
   liquidityUsd: number | null;
 
-  /** Возраст пула в днях; null — дата неизвестна. */
   poolAgeDays: number | null;
 
   poolName: string;
@@ -110,7 +102,6 @@ function toAgeDays(value: string | null | undefined): number | null {
 export async function getMarkets(list: MarketList): Promise<MarketToken[]> {
   const network = ACTIVE_NETWORK.tokenSearchNetwork;
 
-  // Тестнет DEX-данных не имеет: честнее пустой список, чем чужие цены.
   if (!network) {
     return [];
   }
@@ -164,8 +155,6 @@ export async function getMarkets(list: MarketList): Promise<MarketToken[]> {
 
     const key = address.toLowerCase();
 
-    // Один токен может держать несколько пулов — оставляем первый,
-    // он же самый крупный по сортировке источника.
     if (seen.has(key)) {
       continue;
     }

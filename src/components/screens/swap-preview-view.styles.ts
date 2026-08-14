@@ -68,6 +68,10 @@ export const styles = StyleSheet.create({
     borderRadius: Radius.md,
   },
 
+  disabled: {
+    opacity: 0.45,
+  },
+
   pressed: {
     opacity: 0.65,
   },

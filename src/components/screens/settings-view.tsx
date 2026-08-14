@@ -18,6 +18,10 @@ type SettingsViewProps = {
 
   onChangePin: () => void;
 
+  onOpenLimits: () => void;
+
+  onRevealPhrase: () => void;
+
   onBack?: () => void;
 };
 
@@ -91,6 +95,8 @@ export function SettingsView({
   version,
   onManageWallets,
   onChangePin,
+  onOpenLimits,
+  onRevealPhrase,
   onBack,
 }: SettingsViewProps) {
   return (
@@ -109,8 +115,21 @@ export function SettingsView({
 
       <SettingsSection title="Security">
         <SettingsRow
+          title="Transaction limits"
+          subtitle="Cap the dollar value of a single transfer"
+          onPress={onOpenLimits}
+        />
+
+        <SettingsRow
+          title="Recovery phrase and private key"
+          subtitle="Show the words that restore this wallet"
+          onPress={onRevealPhrase}
+        />
+
+        <SettingsRow
           title="Change PIN"
           subtitle="Update the 6-digit code protecting this wallet"
+          divider
           onPress={onChangePin}
         />
       </SettingsSection>

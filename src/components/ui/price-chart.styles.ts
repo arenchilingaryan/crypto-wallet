@@ -23,8 +23,6 @@ export const styles = StyleSheet.create({
     gap: Spacing.md,
   },
 
-  // Long prices shrink inside the column instead of pushing the
-  // range pill out of the card (Yoga defaults to flexShrink: 0).
   identity: {
     flexShrink: 1,
     minWidth: 0,
@@ -52,8 +50,6 @@ export const styles = StyleSheet.create({
     flexShrink: 0,
   },
 
-  // Full bleed: the line and its gradient run to the card edges,
-  // matching the reference. The card clips overflow at its radius.
   chartWrap: {
     height: CHART_HEIGHT,
     marginHorizontal: -Spacing.lg,
@@ -91,8 +87,6 @@ export const styles = StyleSheet.create({
     opacity: 0.7,
   },
 
-  // The percent belongs to the series; while a new range loads it dims
-  // together with the line so stale numbers do not read as current.
   stale: {
     opacity: 0.4,
   },
@@ -117,8 +111,6 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  // Active = one elevation step UP from the menu surface, same
-  // convention as the active range button below the chart.
   menuItemActive: {
     backgroundColor: Colors.border,
   },

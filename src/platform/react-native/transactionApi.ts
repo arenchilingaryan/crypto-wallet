@@ -5,6 +5,7 @@ import { erc20Abi } from "@/core/blockchain/erc20Abi";
 import { getApprovals } from "@/core/blockchain/getApprovals";
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
 import { prepareErc20Revoke } from "@/core/transactions/prepareErc20Revoke";
+import { preparePermit2Revoke } from "@/core/transactions/preparePermit2Revoke";
 import {
   encodeSwapCalldata,
   getUniswapDeployment,
@@ -26,10 +27,9 @@ import {
   type SwapAssetRef,
   type SwapIntent,
 } from "@/core/transactions/swap";
-import { getActiveWallet } from "@/core/wallet/walletStore";
+import { walletEngine } from "./compositionRoot";
 
 import { ethereumPublicClient } from "./ethereumPublicClient";
-import { expoSecretStorage } from "./expoSecretStorage";
 
 type PrepareNativeTransferInput = {
   to: Address;
@@ -78,11 +78,11 @@ export type NativeTransferQuote = {
   hasSufficientBalance: boolean;
 };
 
-// Слиппедж кошелька фиксированный — 0.5%.
 export const SWAP_SLIPPAGE_BPS = 50;
 
-// Дедлайн исполнения свопа после подписи.
-const SWAP_DEADLINE_SECONDS = 15 * 60;
+export const SWAP_DEADLINE_MINUTES = 15;
+
+const SWAP_DEADLINE_SECONDS = SWAP_DEADLINE_MINUTES * 60;
 
 type SwapQuoteInput = {
   assetIn: SwapAssetRef;
@@ -103,12 +103,10 @@ export type SwapQuote = {
 
   tokenInBalance: bigint;
 
-  // ERC-20 на входе требует approve роутеру перед свопом.
   needsApproval: boolean;
 
   gas: bigint;
 
-  // Газ до approve оценивается квотером, не нодой — поэтому честный флаг.
   gasIsExact: boolean;
 
   maxFeePerGas: bigint;
@@ -136,7 +134,7 @@ export const transactionApi = {
     to,
     value,
   }: PrepareNativeTransferInput): Promise<NativeTransferQuote> {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -235,7 +233,7 @@ export const transactionApi = {
   },
 
   async prepareNativeTransfer({ to, value }: PrepareNativeTransferInput) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -264,10 +262,8 @@ export const transactionApi = {
     );
   },
 
-  // Баланс токена активного кошелька — экран send/erc20 собирает
-  // состояние сам: метаданные из getTokenMetadata, баланс отсюда.
   async getErc20Balance(token: Address): Promise<bigint> {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -289,7 +285,7 @@ export const transactionApi = {
     to,
     amount,
   }: Pick<Erc20TransferInput, "token" | "to" | "amount">): Promise<Erc20TransferQuote> {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -321,8 +317,6 @@ export const transactionApi = {
       ethereumPublicClient.estimateFeesPerGas(),
     ]);
 
-    // transfer с суммой выше баланса ревертится ещё на estimateGas —
-    // при нехватке токенов честно отвечаем без оценки газа.
     if (amount > tokenBalance) {
       return {
         ethBalanceWei,
@@ -374,9 +368,8 @@ export const transactionApi = {
     };
   },
 
-  // Разрешение входного токена роутеру активной сети.
   async getSwapAllowance(token: Address): Promise<bigint> {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -400,7 +393,7 @@ export const transactionApi = {
     assetOut,
     amountIn,
   }: SwapQuoteInput): Promise<SwapQuote | null> {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -463,7 +456,6 @@ export const transactionApi = {
         ethereumPublicClient.estimateFeesPerGas(),
       ]);
 
-    // Ни одного пула с ликвидностью — обмена нет.
     if (!best) {
       return null;
     }
@@ -477,9 +469,6 @@ export const transactionApi = {
       ? amountIn < ethBalanceWei
       : amountIn <= tokenInBalance;
 
-    // Точная оценка газа возможна, только когда транзакция исполнима
-    // прямо сейчас: хватает баланса и не ждём approve. Иначе — оценка
-    // квотера плюс накладные транзакции.
     let gas = best.quoterGasEstimate + 80_000n;
 
     let gasIsExact = false;
@@ -574,7 +563,7 @@ export const transactionApi = {
 
     route: SwapRoute;
   }) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -612,6 +601,8 @@ export const transactionApi = {
     return prepareSwap(
       intent,
       {
+        now: Date.now(),
+
         expectedChainId: ACTIVE_NETWORK.chain.id,
 
         expectedFrom: activeWallet.address,
@@ -622,9 +613,8 @@ export const transactionApi = {
     );
   },
 
-  // Аудит разрешений: читаем матрицу токен×известный спендер одним multicall.
   async getApprovals(assets: PortfolioAsset[]) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -655,7 +645,7 @@ export const transactionApi = {
 
     spenderName: string;
   }) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -664,6 +654,51 @@ export const transactionApi = {
     return prepareErc20Revoke(
       {
         kind: "erc20-revoke",
+
+        chainId: ACTIVE_NETWORK.chain.id,
+
+        from: activeWallet.address,
+
+        token,
+
+        spender,
+
+        tokenSymbol,
+
+        spenderName,
+      },
+      {
+        expectedChainId: ACTIVE_NETWORK.chain.id,
+
+        expectedFrom: activeWallet.address,
+      },
+      ethereumPublicClient,
+    );
+  },
+
+  async preparePermit2Revoke({
+    token,
+    spender,
+    tokenSymbol,
+    spenderName,
+  }: {
+    token: Address;
+
+    spender: Address;
+
+    tokenSymbol: string;
+
+    spenderName: string;
+  }) {
+    const activeWallet = await walletEngine.getActive();
+
+    if (!activeWallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    return preparePermit2Revoke(
+      {
+        kind: "permit2-revoke",
 
         chainId: ACTIVE_NETWORK.chain.id,
 
@@ -700,7 +735,7 @@ export const transactionApi = {
 
     tokenDecimals: number;
   }) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");
@@ -746,7 +781,7 @@ export const transactionApi = {
     tokenSymbol,
     tokenDecimals,
   }: Erc20TransferInput) {
-    const activeWallet = await getActiveWallet(expoSecretStorage);
+    const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
       throw new Error("Active wallet not found");

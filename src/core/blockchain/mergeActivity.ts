@@ -1,12 +1,54 @@
 import { formatEther, formatUnits, type Address } from "viem";
 
-import type { ActivityItem } from "./activity";
+import { resolveDirection, type ActivityItem } from "./activity";
 
 import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
+
+import { addDecimalAmounts, isPositiveAmount } from "./decimalAmount";
+
+function creditedFromChain(
+  transaction: TrackedTransaction,
+  chainActivity: ActivityItem[],
+  wallet: string,
+): string | null {
+  if (transaction.assetType !== "swap") {
+    return null;
+  }
+
+  const symbolOut = transaction.symbolOut?.toLowerCase();
+
+  if (!symbolOut) {
+    return null;
+  }
+
+  const tokenOut = transaction.contractAddressOut?.toLowerCase() ?? null;
+
+  const credits = chainActivity.filter((item) => {
+    if (
+      item.hash.toLowerCase() !== transaction.hash.toLowerCase() ||
+      item.to?.toLowerCase() !== wallet
+    ) {
+      return false;
+    }
+
+    return tokenOut === null
+      ? item.assetType === "native" && item.symbol.toLowerCase() === symbolOut
+      : item.contractAddress?.toLowerCase() === tokenOut;
+  });
+
+  if (credits.length === 0) {
+    return null;
+  }
+
+  const total = addDecimalAmounts(credits.map((item) => item.amount));
+
+  return total !== null && isPositiveAmount(total) ? total : null;
+}
 
 function trackedToActivity(
   transaction: TrackedTransaction,
   walletAddress: Address,
+  credited: string | null,
 ): ActivityItem | null {
   const wallet = walletAddress.toLowerCase();
 
@@ -18,7 +60,6 @@ function trackedToActivity(
     return null;
   }
 
-  // Нативный перевод — wei, всё остальное несёт свои decimals.
   const amount =
     transaction.assetType === "native"
       ? formatEther(BigInt(transaction.valueWei))
@@ -34,7 +75,13 @@ function trackedToActivity(
 
     status: transaction.status,
 
-    direction: isSender ? "sent" : "received",
+    direction: resolveDirection(
+      transaction.from,
+      transaction.to,
+      walletAddress,
+    ),
+
+    origin: "wallet-signed",
 
     assetType: transaction.assetType,
 
@@ -60,12 +107,16 @@ function trackedToActivity(
     symbolOut: transaction.symbolOut,
 
     amountOut:
-      transaction.valueOutWei !== undefined
+      credited ??
+      (transaction.valueOutWei !== undefined
         ? formatUnits(
             BigInt(transaction.valueOutWei),
             transaction.tokenOutDecimals ?? 18,
           )
-        : undefined,
+        : undefined),
+
+    amountOutIsQuote:
+      credited === null && transaction.valueOutWei !== undefined,
   };
 }
 
@@ -74,8 +125,16 @@ export function mergeActivity(
   tracked: TrackedTransaction[],
   walletAddress: Address,
 ): ActivityItem[] {
+  const wallet = walletAddress.toLowerCase();
+
   const local = tracked
-    .map((transaction) => trackedToActivity(transaction, walletAddress))
+    .map((transaction) =>
+      trackedToActivity(
+        transaction,
+        walletAddress,
+        creditedFromChain(transaction, chainActivity, wallet),
+      ),
+    )
     .filter((item): item is ActivityItem => item !== null);
 
   const trackedHashes = new Set(local.map((item) => item.hash.toLowerCase()));

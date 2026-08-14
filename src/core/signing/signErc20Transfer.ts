@@ -8,9 +8,12 @@ import {
     type PreparedErc20Transfer,
 } from "@/core/transactions/erc20Transfer";
 
-import type { SecretStorage } from "@/core/wallet/ports/secretStorage";
+import type {
+  SignableTransaction,
+  WalletSigner,
+} from "@/core/ports/walletSigner";
 
-import { getActiveSigningAccount } from "./getActiveSigningAccount";
+import { signAndVerify } from "./signAndVerify";
 
 type SignErc20TransferInput = {
   transaction: PreparedErc20Transfer;
@@ -22,24 +25,26 @@ type SignErc20TransferInput = {
 
 export async function signErc20Transfer(
   { transaction, authorization, expectedChainId }: SignErc20TransferInput,
-  storage: SecretStorage,
+  signer: WalletSigner,
 ): Promise<Hex> {
   assertSessionUnlocked();
 
   consumeTransactionAuthorization(transaction, authorization);
 
-  const account = await getActiveSigningAccount(storage);
+  const address = await signer.getAddress();
 
   const validated = validatePreparedErc20TransferForSigning(transaction, {
     expectedChainId,
 
-    expectedFrom: account.address,
+    expectedFrom: address,
   });
 
-  const signedTransaction = await account.signTransaction({
+  const payload: SignableTransaction = {
     type: "eip1559",
 
     chainId: validated.chainId,
+
+    from: validated.from,
 
     to: validated.to,
 
@@ -54,7 +59,7 @@ export async function signErc20Transfer(
     maxPriorityFeePerGas: validated.maxPriorityFeePerGas,
 
     data: validated.data,
-  });
+  };
 
-  return signedTransaction;
+  return signAndVerify(signer, payload);
 }

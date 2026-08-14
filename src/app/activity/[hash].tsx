@@ -17,9 +17,24 @@ import { getTransactionDetails } from "@/platform/react-native/getTransactionDet
 export default function TransactionDetailsScreen() {
   const router = useRouter();
 
-  const { hash } = useLocalSearchParams<{
-    hash: Hash;
-  }>();
+  const {
+    hash,
+    symbol,
+    amount,
+    assetType,
+    symbolOut,
+    amountOut,
+    amountOutIsQuote,
+  } =
+    useLocalSearchParams<{
+      symbol?: string;
+      amount?: string;
+      assetType?: string;
+      symbolOut?: string;
+      amountOut?: string;
+      amountOutIsQuote?: string;
+      hash: Hash;
+    }>();
 
   const [transaction, setTransaction] = useState<TransactionDetails | null>(
     null,
@@ -34,7 +49,14 @@ export default function TransactionDetailsScreen() {
       try {
         setError(null);
 
-        const result = await getTransactionDetails(hash);
+        const result = await getTransactionDetails(hash, {
+          symbol,
+          amount,
+          assetType,
+          symbolOut,
+          amountOut,
+          amountOutIsQuote: amountOutIsQuote === "1",
+        });
 
         if (!active) {
           return;
@@ -57,7 +79,7 @@ export default function TransactionDetailsScreen() {
     return () => {
       active = false;
     };
-  }, [hash]);
+  }, [hash, symbol, amount, assetType, symbolOut, amountOut, amountOutIsQuote]);
 
   if (error) {
     return (

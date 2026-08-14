@@ -8,7 +8,7 @@ import { AppText } from "./text";
 type InputProps = TextInputProps & {
   label?: string;
   error?: string | null;
-  /** Monospace input — seed phrases, addresses. */
+
   mono?: boolean;
 };
 

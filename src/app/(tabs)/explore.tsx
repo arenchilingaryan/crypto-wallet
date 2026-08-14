@@ -21,8 +21,6 @@ export default function ExploreScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
-  // Уже загруженные списки держим в памяти вкладки: у публичного API
-  // жёсткий лимит запросов, и переключение сегментов не должно его жечь.
   const cache = useRef<Partial<Record<MarketList, MarketToken[]>>>({});
 
   useEffect(() => {

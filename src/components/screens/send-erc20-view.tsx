@@ -1,7 +1,10 @@
 import { Pressable, TextInput, View } from "react-native";
 
+import { SecurityBriefing } from "@/components/security/security-briefing";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+
+import type { SecurityReview } from "@/core/security/securityReview";
 
 import { styles } from "./send-erc20-view.styles";
 
@@ -10,6 +13,8 @@ type SendErc20ViewProps = {
 
   to: string;
   amount: string;
+
+  review: SecurityReview | null;
 
   error: string | null;
   loading: boolean;
@@ -33,6 +38,7 @@ export function SendErc20View({
   symbol,
   to,
   amount,
+  review,
   error,
   loading,
 
@@ -134,6 +140,10 @@ export function SendErc20View({
           )}
         </View>
 
+        {review && review.decision.decision === "block" && (
+          <SecurityBriefing review={review} />
+        )}
+
         {error && (
           <AppText variant="caption" tone="danger">
             {error}
@@ -150,7 +160,11 @@ export function SendErc20View({
           ]}
         >
           <AppText variant="label">
-            {loading ? "Preparing…" : "Continue"}
+            {loading
+              ? "Checking this transfer…"
+              : review?.decision.decision === "block"
+                ? "This wallet will not sign this"
+                : "Continue"}
           </AppText>
         </Pressable>
       </View>

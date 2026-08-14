@@ -1,18 +1,9 @@
 import { getAssetMarketData } from "./getAssetMarketData";
 import type { Portfolio, PortfolioAsset } from "./getPortfolio";
 
-/**
- * Изменение портфеля за 24 часа.
- *
- * Считается по тем же данным, что рисуют график на экране актива: точка
- * суток назад против текущей спотовой цены. Активы без рыночных данных
- * (тестнет, неизвестный токен) в расчёт не входят вообще — ни в «было»,
- * ни в «стало», иначе процент врал бы на пустом месте.
- */
 export type PortfolioChange = {
   totalChangePercent: number | null;
 
-  /** Ключ — assetKey(asset). */
   byAsset: Record<string, number>;
 };
 

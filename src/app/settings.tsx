@@ -19,6 +19,12 @@ export default function SettingsScreen() {
       onChangePin={() => {
         router.push("/change-pin");
       }}
+      onRevealPhrase={() => {
+        router.push("/reveal");
+      }}
+      onOpenLimits={() => {
+        router.push("/limits");
+      }}
       onBack={() => {
         router.back();
       }}

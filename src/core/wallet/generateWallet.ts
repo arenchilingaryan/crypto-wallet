@@ -5,7 +5,7 @@ import {
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { mnemonicToAccount } from "viem/accounts";
 
-import type { RandomSource } from "./ports/randomSource";
+import type { RandomSource } from "../ports/randomSource";
 
 const MNEMONIC_ENTROPY_BYTES = 16;
 

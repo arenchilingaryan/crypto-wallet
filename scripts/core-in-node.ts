@@ -1,0 +1,4540 @@
+import { webcrypto } from "node:crypto";
+
+import { bytesToHex } from "@noble/hashes/utils.js";
+
+import {
+  formatUnits,
+  parseTransaction,
+  serializeTransaction,
+  type Address,
+} from "viem";
+import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
+
+import type { RandomSource } from "@/core/ports/randomSource";
+import type {
+  SignableTransaction,
+  WalletSigner,
+} from "@/core/ports/walletSigner";
+
+import { TransactionValidationError } from "@/core/transactions/nativeTransfer";
+
+import { confirmMnemonic } from "@/core/wallet/confirmMnemonic";
+import {
+  openWalletVault,
+  parseWalletVault,
+  sealWalletVault,
+  VaultOpenError,
+} from "@/core/wallet/walletVault";
+import {
+  openOrCreateVault,
+  stageRotation,
+  type SlotStore,
+} from "@/core/wallet/vaultSlots";
+import {
+  parseVaultKeySlot,
+  serializeVaultKeySlot,
+  unwrapMasterKey,
+  VaultKeyError,
+  wrapMasterKey,
+} from "@/core/wallet/vaultMasterKey";
+import { importWallet } from "@/core/wallet/importWallet";
+import { revealSecret } from "@/core/wallet/revealSecret";
+import {
+  createWalletEngine,
+  type WalletAccount as WalletAccountShape,
+} from "@/core/wallet/walletEngine";
+
+import type { SecretStore } from "@/core/ports/secretStore";
+import type { KeyValueStorage } from "@/core/ports/keyValueStorage";
+import type { WalletSecret } from "@/core/wallet/walletSecret";
+
+import { createLocalMnemonicSigner } from "@/core/signing/localMnemonicSigner";
+import { signMessage } from "@/core/signing/signMessage";
+import { signNativeTransfer } from "@/core/signing/signNativeTransfer";
+
+import { unlockSession } from "@/core/security/sessionLock";
+import { grantTransactionAuthorization } from "@/core/security/transactionAuthorization";
+
+import { prepareErc20Revoke } from "@/core/transactions/prepareErc20Revoke";
+import { prepareErc20Transfer } from "@/core/transactions/prepareErc20Transfer";
+import { prepareNativeTransfer } from "@/core/transactions/prepareNativeTransfer";
+
+import { signErc20Revoke } from "@/core/signing/signErc20Revoke";
+import { signErc20Transfer } from "@/core/signing/signErc20Transfer";
+
+import { configureCore } from "@/core/config/runtimeConfig";
+import { WalletLockedError } from "@/core/security/sessionLock";
+
+import { createPin, hasPin, verifyPin } from "@/core/security/pin";
+import {
+  advanceFreeze,
+  createFreeze,
+  FREEZE_DURATION_MS,
+  isFrozen,
+  parseFreeze,
+  remainingFreezeMs,
+  serializeFreeze,
+  WalletFrozenError,
+} from "@/core/security/panicFreeze";
+import { parsePinVerifier } from "@/core/security/pinVerifier";
+
+import { buildPolicyContext } from "@/core/security/policyContext";
+import {
+  decidePolicy,
+  toAmountUsd,
+  type PolicyIntent,
+} from "@/core/security/policyDecision";
+import {
+  evaluateSecurityPolicy,
+  parseSecurityPolicy,
+  serializeSecurityPolicy,
+  type SecurityPolicy,
+} from "@/core/security/securityPolicy";
+
+import {
+  approvalExposureUsd,
+  getApprovals,
+  scoreApproval,
+} from "@/core/blockchain/getApprovals";
+import { normalizeTokenBalance } from "@/core/blockchain/getPortfolio";
+import { getKnownSpenders } from "@/core/blockchain/knownSpenders";
+import {
+  getPermit2Spenders,
+  isPermit2Expired,
+  PERMIT2_UNLIMITED,
+} from "@/core/blockchain/permit2";
+import { encodePermit2Revoke } from "@/core/transactions/permit2Revoke";
+import { validateSwapIntent } from "@/core/transactions/swap";
+import { mergeActivity } from "@/core/blockchain/mergeActivity";
+import {
+  isOutflow,
+  presentActivity,
+  resolveDirection,
+} from "@/core/blockchain/activity";
+import {
+  describeValuation,
+  valuePortfolio,
+} from "@/core/blockchain/valuePortfolio";
+import { DEFAULT_SECURITY_POLICY } from "@/core/security/securityPolicy";
+import { createOutflowGuard } from "@/core/security/outflowGuard";
+import { analyzeExecution } from "@/core/transactions/analyzeExecution";
+import {
+  creditedFromLogs,
+  ERC20_TRANSFER_TOPIC,
+} from "@/core/transactions/executionFacts";
+import {
+  reviewApproval,
+  reviewSwap,
+  reviewTransfer,
+} from "@/core/security/securityReview";
+import { resolveDetailsAsset } from "@/core/transactions/transactionDetails";
+import {
+  addDecimalAmounts,
+  isPositiveAmount,
+} from "@/core/blockchain/decimalAmount";
+import { getUniswapDeployment } from "@/core/blockchain/uniswap";
+
+function createMemoryStorage(): KeyValueStorage {
+  const map = new Map<string, string>();
+
+  return {
+    async get(key) {
+      return map.get(key) ?? null;
+    },
+
+    async set(key, value) {
+      map.set(key, value);
+    },
+
+    async remove(key) {
+      map.delete(key);
+    },
+  };
+}
+
+function createMemorySecretStore(): SecretStore {
+  const map = new Map<string, WalletSecret>();
+
+  return {
+    async load(walletId) {
+      return map.get(walletId) ?? null;
+    },
+
+    async save(walletId, secret) {
+      map.set(walletId, secret);
+    },
+
+    async remove(walletId) {
+      map.delete(walletId);
+    },
+  };
+}
+
+const nodeRandom: RandomSource = {
+  async getBytes(length) {
+    return webcrypto.getRandomValues(new Uint8Array(length));
+  },
+};
+
+const fakeClient = {
+  getChainId: async () => 1,
+  getBalance: async () => 10n ** 18n,
+  getTransactionCount: async () => 7,
+  estimateGas: async () => 21_000n,
+  estimateFeesPerGas: async () => ({
+    maxFeePerGas: 30n * 10n ** 9n,
+    maxPriorityFeePerGas: 10n ** 9n,
+  }),
+};
+
+function makeSigner(
+  mnemonic: string,
+  sign: (
+    account: ReturnType<typeof mnemonicToAccount>,
+    transaction: SignableTransaction,
+  ) => Promise<`0x${string}`>,
+): WalletSigner {
+  const account = mnemonicToAccount(mnemonic);
+
+  return {
+    async getAddress() {
+      return account.address;
+    },
+
+    async signMessage(message) {
+      return account.signMessage({ message });
+    },
+
+    async signTransaction(transaction) {
+      return sign(account, transaction);
+    },
+  };
+}
+
+const fakeErc20Client = {
+  ...fakeClient,
+  estimateGas: async () => 65_000n,
+  readContract: async () => 10_000_000n,
+};
+
+let failed = 0;
+
+function check(label: string, passed: boolean, detail = "") {
+  console.log(
+    `${passed ? "ok  " : "FAIL"} ${label}${detail ? ` — ${detail}` : ""}`,
+  );
+
+  if (!passed) {
+    failed += 1;
+  }
+}
+
+async function expectRejected(
+  label: string,
+  transaction: Parameters<typeof signNativeTransfer>[0]["transaction"],
+  signer: WalletSigner,
+  expectedFragment: string,
+) {
+  grantTransactionAuthorization(transaction, `token-${label}`);
+
+  let error: unknown = null;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction,
+        authorization: `token-${label}`,
+        expectedChainId: 1,
+      },
+      signer,
+    );
+  } catch (caught) {
+    error = caught;
+  }
+
+  const message = error instanceof Error ? error.message : "no error was thrown";
+
+  check(
+    label,
+    error instanceof TransactionValidationError &&
+      message.includes(expectedFragment),
+    message,
+  );
+}
+
+export async function main() {
+  configureCore({ dataApiKey: "test-key" });
+
+  const storage = createMemoryStorage();
+
+  const secrets = createMemorySecretStore();
+
+  const engine = createWalletEngine({
+    storage,
+    secrets,
+    random: nodeRandom,
+  });
+
+  const prepared0 = await engine.prepare();
+
+  const registryBeforeConfirm = await engine.list();
+
+  const createdAccount = await engine.create(prepared0.recoveryPhrase);
+
+  const created = { account: createdAccount };
+
+  const generated = {
+    address: createdAccount.address,
+    mnemonic: prepared0.recoveryPhrase,
+  };
+
+  check(
+    "prepare() persists nothing before confirmation",
+    registryBeforeConfirm.length === 0 &&
+      (await engine.list()).length === 1 &&
+      prepared0.address === createdAccount.address,
+  );
+
+  check(
+    "WalletEngine.create",
+    generated.mnemonic.split(" ").length === 12 &&
+      generated.address.startsWith("0x"),
+    generated.address,
+  );
+
+  check(
+    "confirmMnemonic",
+    confirmMnemonic(generated.mnemonic, [
+      { index: 2, word: generated.mnemonic.split(" ")[2] },
+    ]),
+  );
+
+  check(
+    "importWallet restores the same address",
+    importWallet(generated.mnemonic).address === generated.address,
+  );
+
+  const wallets = await engine.list();
+
+  const active = await engine.getActive();
+
+  check(
+    "WalletEngine: registry and active wallet",
+    wallets.length === 1 && active?.address === generated.address,
+    active?.name,
+  );
+
+  const storedSecret = await secrets.load(created.account.id);
+
+  check(
+    "SecretStore stores a versioned secret",
+    storedSecret?.version === 1 && storedSecret.mnemonic === generated.mnemonic,
+  );
+
+  unlockSession();
+
+  const signer = createLocalMnemonicSigner({ engine, secrets });
+
+  check(
+    "WalletSigner.getAddress",
+    (await signer.getAddress()) === generated.address,
+  );
+
+  const signed = await signMessage({ message: "hexagonal" }, signer);
+
+  check(
+    "signMessage through the port",
+    signed.signature.startsWith("0x") && signed.address === generated.address,
+  );
+
+  const prepared = await prepareNativeTransfer(
+    {
+      kind: "native-transfer",
+      chainId: 1,
+      from: generated.address,
+      to: "0x000000000000000000000000000000000000dEaD",
+      value: 10n ** 15n,
+    },
+    { expectedChainId: 1, expectedFrom: generated.address },
+    
+    fakeClient as never,
+  );
+
+  check(
+    "prepareNativeTransfer against a stub network",
+    prepared.nonce === 7 && prepared.gas === 21_000n,
+  );
+
+  grantTransactionAuthorization(prepared, "node-test-token");
+
+  const rawTransaction = await signNativeTransfer(
+    {
+      transaction: prepared,
+      authorization: "node-test-token",
+      expectedChainId: 1,
+    },
+    signer,
+  );
+
+  check(
+    "signNativeTransfer through the port",
+    rawTransaction.startsWith("0x02"),
+    `${rawTransaction.slice(0, 14)}…`,
+  );
+
+  const otherStorage = createMemoryStorage();
+
+  const otherSecrets = createMemorySecretStore();
+
+  const otherEngine = createWalletEngine({
+    storage: otherStorage,
+    secrets: otherSecrets,
+    random: nodeRandom,
+  });
+
+  const otherPrepared = await otherEngine.prepare();
+
+  await otherEngine.create(otherPrepared.recoveryPhrase);
+
+  const otherWallet = { mnemonic: otherPrepared.recoveryPhrase };
+
+  const otherSigner = createLocalMnemonicSigner({
+    engine: otherEngine,
+    secrets: otherSecrets,
+  });
+
+  grantTransactionAuthorization(prepared, "cross-wallet-token");
+
+  let refusedForeignSigner = false;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction: prepared,
+        authorization: "cross-wallet-token",
+        expectedChainId: 1,
+      },
+      otherSigner,
+    );
+  } catch {
+    refusedForeignSigner = true;
+  }
+
+  check(
+    "a foreign signer does not sign the wallet's transaction",
+    refusedForeignSigner,
+  );
+
+  const rogueAccount = mnemonicToAccount(otherWallet.mnemonic);
+
+  const impostorSigner: WalletSigner = {
+    async getAddress() {
+      return generated.address;
+    },
+
+    async signMessage(message) {
+      return rogueAccount.signMessage({ message });
+    },
+
+    async signTransaction(transaction) {
+      return rogueAccount.signTransaction({
+        type: "eip1559",
+        chainId: transaction.chainId,
+        to: transaction.to,
+        value: transaction.value,
+        nonce: transaction.nonce,
+        gas: transaction.gas,
+        maxFeePerGas: transaction.maxFeePerGas,
+        maxPriorityFeePerGas: transaction.maxPriorityFeePerGas,
+        data: transaction.data,
+      });
+    },
+  };
+
+  grantTransactionAuthorization(prepared, "impostor-token");
+
+  let impostorError: unknown = null;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction: prepared,
+        authorization: "impostor-token",
+        expectedChainId: 1,
+      },
+      impostorSigner,
+    );
+  } catch (error) {
+    impostorError = error;
+  }
+
+  check(
+    "a signature by a foreign key posing as our address is rejected",
+    impostorError instanceof TransactionValidationError &&
+      impostorError.code === "INVALID_FROM",
+    impostorError instanceof TransactionValidationError
+      ? impostorError.code
+      : "no error was thrown",
+  );
+
+  const tamperingSigner: WalletSigner = {
+    async getAddress() {
+      return generated.address;
+    },
+
+    async signMessage(message) {
+      return signer.signMessage(message);
+    },
+
+    async signTransaction(transaction) {
+      return signer.signTransaction({
+        ...transaction,
+        to: "0x000000000000000000000000000000000000bEEF",
+      });
+    },
+  };
+
+  grantTransactionAuthorization(prepared, "tamper-token");
+
+  let tamperError: unknown = null;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction: prepared,
+        authorization: "tamper-token",
+        expectedChainId: 1,
+      },
+      tamperingSigner,
+    );
+  } catch (error) {
+    tamperError = error;
+  }
+
+  check(
+    "swapping the recipient after validation is rejected",
+    tamperError instanceof TransactionValidationError &&
+      tamperError.code === "INVALID_DATA",
+    tamperError instanceof TransactionValidationError
+      ? tamperError.code
+      : "no error was thrown",
+  );
+
+  const delegationSigner: WalletSigner = {
+    async getAddress() {
+      return generated.address;
+    },
+
+    async signMessage(message) {
+      return signer.signMessage(message);
+    },
+
+    async signTransaction(transaction) {
+      const walletAccount = mnemonicToAccount(generated.mnemonic);
+
+      if (!walletAccount.signAuthorization) {
+        throw new Error("viem build without EIP-7702 support");
+      }
+
+      const authorization = await walletAccount.signAuthorization({
+        address: "0x000000000000000000000000000000000000dEaD",
+        chainId: transaction.chainId,
+        nonce: transaction.nonce + 1,
+      });
+
+      return walletAccount.signTransaction({
+        type: "eip7702",
+        chainId: transaction.chainId,
+        to: transaction.to,
+        value: transaction.value,
+        nonce: transaction.nonce,
+        gas: transaction.gas,
+        maxFeePerGas: transaction.maxFeePerGas,
+        maxPriorityFeePerGas: transaction.maxPriorityFeePerGas,
+        data: transaction.data,
+        authorizationList: [authorization],
+      });
+    },
+  };
+
+  await expectRejected(
+    "injected EOA delegation (EIP-7702) is rejected",
+    prepared,
+    delegationSigner,
+    "authorization list",
+  );
+
+  const legacySigner = makeSigner(generated.mnemonic, (account, tx) =>
+    account.signTransaction({
+      type: "legacy",
+      chainId: tx.chainId,
+      to: tx.to,
+      value: tx.value,
+      nonce: tx.nonce,
+      gas: tx.gas,
+      gasPrice: tx.maxFeePerGas,
+      data: tx.data,
+    }),
+  );
+
+  await expectRejected(
+    "transaction-type substitution (legacy) is rejected",
+    prepared,
+    legacySigner,
+    "type",
+  );
+
+  const accessListSigner = makeSigner(generated.mnemonic, (account, tx) =>
+    account.signTransaction({
+      type: "eip1559",
+      chainId: tx.chainId,
+      to: tx.to,
+      value: tx.value,
+      nonce: tx.nonce,
+      gas: tx.gas,
+      maxFeePerGas: tx.maxFeePerGas,
+      maxPriorityFeePerGas: tx.maxPriorityFeePerGas,
+      data: tx.data,
+      accessList: [
+        {
+          address: "0x000000000000000000000000000000000000bEEF",
+          storageKeys: [],
+        },
+      ],
+    }),
+  );
+
+  await expectRejected(
+    "an injected access list is rejected",
+    prepared,
+    accessListSigner,
+    "access list",
+  );
+
+  const trailingGarbageSigner = makeSigner(
+    generated.mnemonic,
+    async (account, tx) => {
+      const honest = await account.signTransaction({
+        type: "eip1559",
+        chainId: tx.chainId,
+        to: tx.to,
+        value: tx.value,
+        nonce: tx.nonce,
+        gas: tx.gas,
+        maxFeePerGas: tx.maxFeePerGas,
+        maxPriorityFeePerGas: tx.maxPriorityFeePerGas,
+        data: tx.data,
+      });
+
+      return `${honest}00` as `0x${string}`;
+    },
+  );
+
+  await expectRejected(
+    "non-canonical encoding is rejected",
+    prepared,
+    trailingGarbageSigner,
+    "canonically encoded",
+  );
+
+  const malleableSigner = makeSigner(
+    generated.mnemonic,
+    async (account, tx) => {
+      const honest = await account.signTransaction({
+        type: "eip1559",
+        chainId: tx.chainId,
+        to: tx.to,
+        value: tx.value,
+        nonce: tx.nonce,
+        gas: tx.gas,
+        maxFeePerGas: tx.maxFeePerGas,
+        maxPriorityFeePerGas: tx.maxPriorityFeePerGas,
+        data: tx.data,
+      });
+
+      const parsedHonest = parseTransaction(honest);
+
+      const order =
+        0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+      const flippedS = order - BigInt(parsedHonest.s ?? "0x0");
+
+      const { r, s, v, yParity, ...unsigned } = parsedHonest;
+
+      return serializeTransaction(unsigned, {
+        r: r as `0x${string}`,
+        s: `0x${flippedS.toString(16).padStart(64, "0")}` as `0x${string}`,
+        yParity: yParity === 0 ? 1 : 0,
+      });
+    },
+  );
+
+  await expectRejected(
+    "a high-s signature is rejected",
+    prepared,
+    malleableSigner,
+    "high-s",
+  );
+
+  const zeroTipPayload = {
+    ...prepared,
+    maxPriorityFeePerGas: 0n,
+  };
+
+  grantTransactionAuthorization(zeroTipPayload, "zero-tip-token");
+
+  let zeroTipSigned: string | null = null;
+
+  try {
+    zeroTipSigned = await signNativeTransfer(
+      {
+        transaction: zeroTipPayload,
+        authorization: "zero-tip-token",
+        expectedChainId: 1,
+      },
+      signer,
+    );
+  } catch (error) {
+    zeroTipSigned = `error: ${(error as Error).message}`;
+  }
+
+  check(
+    "a zero priority fee signs normally",
+    typeof zeroTipSigned === "string" && zeroTipSigned.startsWith("0x02"),
+    zeroTipSigned?.slice(0, 40),
+  );
+
+  const erc20Transfer = await prepareErc20Transfer(
+    {
+      kind: "erc20-transfer",
+      chainId: 1,
+      from: generated.address,
+      token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      recipient: "0x000000000000000000000000000000000000dEaD",
+      amount: 1_000_000n,
+      tokenSymbol: "USDC",
+      tokenDecimals: 6,
+    },
+    { expectedChainId: 1, expectedFrom: generated.address },
+    fakeErc20Client as never,
+  );
+
+  grantTransactionAuthorization(erc20Transfer, "erc20-token");
+
+  const signedErc20 = await signErc20Transfer(
+    {
+      transaction: erc20Transfer,
+      authorization: "erc20-token",
+      expectedChainId: 1,
+    },
+    signer,
+  );
+
+  check(
+    "an ERC-20 transfer signs (value = 0)",
+    signedErc20.startsWith("0x02") && erc20Transfer.value === 0n,
+    `${signedErc20.slice(0, 14)}…`,
+  );
+
+  const revoke = await prepareErc20Revoke(
+    {
+      kind: "erc20-revoke",
+      chainId: 1,
+      from: generated.address,
+      token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      tokenSymbol: "USDC",
+      spenderName: "Permit2",
+    },
+    { expectedChainId: 1, expectedFrom: generated.address },
+    fakeErc20Client as never,
+  );
+
+  grantTransactionAuthorization(revoke, "revoke-token");
+
+  const signedRevoke = await signErc20Revoke(
+    {
+      transaction: revoke,
+      authorization: "revoke-token",
+      expectedChainId: 1,
+    },
+    signer,
+  );
+
+  check(
+    "an approval revoke signs (value = 0)",
+    signedRevoke.startsWith("0x02"),
+    `${signedRevoke.slice(0, 14)}…`,
+  );
+
+  let impostorMessageError: unknown = null;
+
+  try {
+    await signMessage({ message: "hexagonal" }, impostorSigner);
+  } catch (error) {
+    impostorMessageError = error;
+  }
+
+  check(
+    "a message signed by a foreign key is rejected",
+    impostorMessageError instanceof TransactionValidationError &&
+      impostorMessageError.code === "INVALID_FROM",
+  );
+
+  const pinStorage = createMemoryStorage();
+
+  const sha256Hex = async (value: string) => {
+    const digest = await webcrypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(value),
+    );
+
+    return [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
+  const pinDeps = {
+    storage: pinStorage,
+    random: nodeRandom,
+    hash: sha256Hex,
+  };
+
+  await createPin("123456", pinDeps);
+
+  const goodPin = await verifyPin("123456", pinDeps);
+
+  const badPin = await verifyPin("000000", pinDeps);
+
+  check(
+    "PIN: correct accepted, wrong rejected with a counter",
+    goodPin.ok && !badPin.ok && badPin.reason === "invalid",
+    !badPin.ok && badPin.reason === "invalid"
+      ? `attempts left: ${badPin.attemptsLeft}`
+      : "",
+  );
+
+  const storedVerifier = parsePinVerifier(
+    await pinStorage.get("security.pin.verifier.v2"),
+  );
+
+  check(
+    "a new PIN is stored as a scrypt verifier, not a single hash round",
+    storedVerifier?.version === 2 &&
+      storedVerifier.kdf === "scrypt" &&
+      storedVerifier.N === 16384 &&
+      storedVerifier.hash.length === 64 &&
+      (await pinStorage.get("security.pin.hash.v1")) === null,
+    `N=${storedVerifier?.version === 2 ? storedVerifier.N : "none"}`,
+  );
+
+  const legacyStorage = createMemoryStorage();
+
+  const legacySalt = "00112233445566778899aabbccddeeff";
+
+  await legacyStorage.set("security.pin.salt.v1", legacySalt);
+
+  await legacyStorage.set(
+    "security.pin.hash.v1",
+    await sha256Hex(`${legacySalt}:654321`),
+  );
+
+  const legacyDeps = {
+    storage: legacyStorage,
+    random: nodeRandom,
+    hash: sha256Hex,
+  };
+
+  const legacyWrong = await verifyPin("111111", legacyDeps);
+
+  const legacyRight = await verifyPin("654321", legacyDeps);
+
+  const migratedVerifier = parsePinVerifier(
+    await legacyStorage.get("security.pin.verifier.v2"),
+  );
+
+  const afterMigration = await verifyPin("654321", {
+    storage: legacyStorage,
+    random: nodeRandom,
+    hash: async () => {
+      throw new Error("legacy hash must not be used after migration");
+    },
+  });
+
+  check(
+    "an old single-round PIN still opens the wallet and is upgraded in place",
+    !legacyWrong.ok &&
+      legacyRight.ok &&
+      migratedVerifier?.version === 2 &&
+      (await legacyStorage.get("security.pin.hash.v1")) === null &&
+      afterMigration.ok,
+    "verified, migrated, legacy keys dropped",
+  );
+
+  const halfMigrated = createMemoryStorage();
+
+  await halfMigrated.set("security.pin.salt.v1", legacySalt);
+
+  await halfMigrated.set(
+    "security.pin.hash.v1",
+    await sha256Hex(`${legacySalt}:654321`),
+  );
+
+  await createPin("654321", {
+    storage: halfMigrated,
+    random: nodeRandom,
+    hash: sha256Hex,
+  });
+
+  await halfMigrated.set("security.pin.salt.v1", legacySalt);
+
+  await halfMigrated.set(
+    "security.pin.hash.v1",
+    await sha256Hex(`${legacySalt}:654321`),
+  );
+
+  const healing = await verifyPin("654321", {
+    storage: halfMigrated,
+    random: nodeRandom,
+    hash: sha256Hex,
+  });
+
+  check(
+    "a legacy hash left behind by an interrupted upgrade is cleared on the next unlock",
+    healing.ok &&
+      (await halfMigrated.get("security.pin.hash.v1")) === null &&
+      (await halfMigrated.get("security.pin.salt.v1")) === null,
+    "cheap hash no longer sits next to the strong one",
+  );
+
+  const tamperedStorage = createMemoryStorage();
+
+  await tamperedStorage.set(
+    "security.pin.verifier.v2",
+    JSON.stringify({
+      version: 2,
+      kdf: "scrypt",
+      N: 1024,
+      r: 8,
+      p: 1,
+      salt: "aa",
+      hash: "bb",
+    }),
+  );
+
+  const weakened = parsePinVerifier(
+    await tamperedStorage.get("security.pin.verifier.v2"),
+  );
+
+  const brickedStorage = createMemoryStorage();
+
+  await brickedStorage.set("security.pin.verifier.v2", "{not json");
+
+  const brickedHasPin = await hasPin(brickedStorage);
+
+  const emptyStorage = createMemoryStorage();
+
+  await emptyStorage.set("security.pin.verifier.v2", "");
+
+  const emptyHasPin = await hasPin(emptyStorage);
+
+  const emptyVerify = await verifyPin("654321", {
+    storage: emptyStorage,
+    random: nodeRandom,
+    hash: sha256Hex,
+  });
+
+  const brickedVerify = await verifyPin("654321", {
+    storage: brickedStorage,
+    random: nodeRandom,
+    hash: sha256Hex,
+  });
+
+  check(
+    "a weakened verifier is rejected instead of being trusted",
+    weakened === null,
+    weakened === null ? "rejected" : "accepted",
+  );
+
+  check(
+    "an unreadable verifier locks the wallet instead of opening it without a PIN",
+    brickedHasPin === true &&
+      !brickedVerify.ok &&
+      brickedVerify.reason === "unusable",
+    `hasPin: ${brickedHasPin}, verify: ${brickedVerify.ok ? "opened" : brickedVerify.reason}`,
+  );
+
+  check(
+    "an emptied verifier is treated as broken, not as a wallet without a PIN",
+    emptyHasPin === true &&
+      !emptyVerify.ok &&
+      emptyVerify.reason === "unusable",
+    `hasPin: ${emptyHasPin}, verify: ${emptyVerify.ok ? "opened" : emptyVerify.reason}`,
+  );
+
+  const leakStorage = createMemoryStorage();
+
+  const leakSecrets = createMemorySecretStore();
+
+  const leakEngine = createWalletEngine({
+    storage: leakStorage,
+    secrets: leakSecrets,
+    random: nodeRandom,
+  });
+
+  const leakPhrase = (await leakEngine.prepare()).recoveryPhrase;
+
+  await leakEngine.create(leakPhrase);
+
+  await createPin("135790", {
+    storage: leakStorage,
+    random: nodeRandom,
+    hash: sha256Hex,
+  });
+
+  const leakedValues: string[] = [];
+
+  for (const key of [
+    "security.pin.verifier.v2",
+    "security.pin.failed-attempts.v1",
+    "security.pin.blocked-until.v1",
+    "wallet.registry.v1",
+    "wallet.active.v1",
+    "wallet.journal.v1",
+  ]) {
+    const value = await leakStorage.get(key);
+
+    if (
+      value &&
+      (value.includes("135790") ||
+        leakPhrase.split(" ").some((word) => value.includes(` ${word} `)) ||
+        value.includes(leakPhrase))
+    ) {
+      leakedValues.push(key);
+    }
+  }
+
+  check(
+    "neither the PIN nor the recovery phrase is written to key-value storage",
+    leakedValues.length === 0,
+    leakedValues.length === 0 ? "6 keys inspected" : leakedValues.join(", "),
+  );
+
+  const stubSigner: WalletSigner = {
+    async getAddress() {
+      return generated.address;
+    },
+
+    async signMessage() {
+      throw new Error("stub signer must never be reached");
+    },
+
+    async signTransaction() {
+      throw new Error("stub signer must never be reached");
+    },
+  };
+
+  const { lockSession } = await import("@/core/security/sessionLock");
+
+  lockSession();
+
+  grantTransactionAuthorization(prepared, "second-token");
+
+  let lockError: unknown = null;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction: prepared,
+        authorization: "second-token",
+        expectedChainId: 1,
+      },
+      stubSigner,
+    );
+  } catch (error) {
+    lockError = error;
+  }
+
+  check(
+    "the lock holds transaction signing inside the domain itself",
+    lockError instanceof WalletLockedError,
+    lockError instanceof Error ? lockError.name : "no error was thrown",
+  );
+
+  let lockedMessage: unknown = null;
+
+  try {
+    await signMessage({ message: "locked" }, stubSigner);
+  } catch (error) {
+    lockedMessage = error;
+  }
+
+  check(
+    "the lock holds message signing inside the domain itself",
+    lockedMessage instanceof WalletLockedError,
+    lockedMessage instanceof Error ? lockedMessage.name : "no error was thrown",
+  );
+
+  const policy: SecurityPolicy = {
+    version: 1,
+    maxSingleTransferUsd: 5000,
+    newRecipientMaxUsd: 300,
+    dailyOutflowLimitUsd: 10000,
+      maxApprovalExposureUsd: null,
+      blockUnlimitedApprovals: true,
+      blockUnknownSpenders: true,
+      maxSwapLossUsd: null,
+  };
+
+  const knownRecipient = "0x000000000000000000000000000000000000dEaD";
+
+  const context = buildPolicyContext({
+    owner: generated.address,
+    activity: [
+      {
+        id: "a1",
+        hash: "0x00",
+        status: "confirmed",
+        direction: "sent",
+        assetType: "native",
+        symbol: "ETH",
+        amount: "1",
+        from: generated.address,
+        to: knownRecipient,
+        contractAddress: null,
+        blockNumber: null,
+        timestamp: Date.now() - 86_400_000,
+      },
+    ] as never,
+    tracked: [
+      {
+        version: 1,
+        hash: "0x01",
+        chainId: 1,
+        walletId: created.account.id,
+        from: generated.address,
+        to: knownRecipient,
+        assetType: "native",
+        symbol: "ETH",
+        valueWei: (10n ** 18n).toString(),
+        createdAt: Date.now() - 3_600_000,
+        status: "confirmed",
+        blockNumber: null,
+        gasUsed: null,
+        effectiveGasPriceWei: null,
+        confirmedAt: null,
+      },
+    ] as never,
+    priceOf: (symbol) => (symbol === "ETH" ? 2000 : null),
+  });
+
+  check(
+    "policy context: known recipient and daily outflow",
+    context.knownRecipients.includes(knownRecipient.toLowerCase()) &&
+      context.spentTodayUsd === 2000,
+    `sent today $${context.spentTodayUsd}`,
+  );
+
+  const overSingle = evaluateSecurityPolicy(
+    { recipient: knownRecipient, amountUsd: 6000 },
+    policy,
+    context,
+  );
+
+  check(
+    "the single-transaction limit fires",
+    !overSingle.allowed && overSingle.rule === "max-single-transfer",
+  );
+
+  const newRecipientVerdict = evaluateSecurityPolicy(
+    { recipient: "0x00000000000000000000000000000000000000Ff", amountUsd: 400 },
+    policy,
+    context,
+  );
+
+  check(
+    "the first transfer to a new address is capped",
+    !newRecipientVerdict.allowed && newRecipientVerdict.rule === "new-recipient",
+  );
+
+  const dailyVerdict = evaluateSecurityPolicy(
+    { recipient: knownRecipient, amountUsd: 4000 },
+    policy,
+    { ...context, spentTodayUsd: 9000 },
+  );
+
+  check(
+    "the daily limit fires",
+    !dailyVerdict.allowed && dailyVerdict.rule === "daily-outflow",
+  );
+
+  check(
+    "a known recipient within limits is allowed",
+    evaluateSecurityPolicy(
+      { recipient: knownRecipient, amountUsd: 250 },
+      policy,
+      context,
+    ).allowed,
+  );
+
+  const noPriceVerdict = evaluateSecurityPolicy(
+    { recipient: "0x00000000000000000000000000000000000000Ff", amountUsd: null },
+    policy,
+    context,
+  );
+
+  check(
+    "an asset with no price does not slip past enabled limits",
+    !noPriceVerdict.allowed,
+    noPriceVerdict.allowed ? "" : noPriceVerdict.message.slice(0, 40) + "…",
+  );
+
+  check(
+    "with no limits an asset without a price sends freely",
+    evaluateSecurityPolicy(
+      { recipient: "0x00000000000000000000000000000000000000Ff", amountUsd: null },
+      {
+        version: 1,
+        maxSingleTransferUsd: null,
+        newRecipientMaxUsd: null,
+        dailyOutflowLimitUsd: null,
+        maxApprovalExposureUsd: null,
+        blockUnlimitedApprovals: true,
+        blockUnknownSpenders: true,
+        maxSwapLossUsd: null,
+      },
+      context,
+    ).allowed,
+  );
+
+  check(
+    "the policy survives serialization",
+    parseSecurityPolicy(serializeSecurityPolicy(policy)).maxSingleTransferUsd ===
+      5000 && parseSecurityPolicy("garbage").maxSingleTransferUsd === null,
+  );
+
+  const strictPolicy: SecurityPolicy = {
+    version: 1,
+    maxSingleTransferUsd: 1000,
+    newRecipientMaxUsd: null,
+    dailyOutflowLimitUsd: null,
+      maxApprovalExposureUsd: null,
+      blockUnlimitedApprovals: true,
+      blockUnknownSpenders: true,
+      maxSwapLossUsd: null,
+  };
+
+  const stranger = "0x00000000000000000000000000000000000000Ff" as const;
+
+  const overLimit = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 4000 },
+    policy: strictPolicy,
+    context,
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "decidePolicy blocks an over-limit transfer on mainnet",
+    overLimit.decision === "block" &&
+      overLimit.enforcement === "enforced" &&
+      overLimit.reason === "over-single-transfer",
+    `${overLimit.reason}/${overLimit.enforcement}`,
+  );
+
+  const underLimit = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 100 },
+    policy: strictPolicy,
+    context,
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "decidePolicy allows an under-limit transfer and says it enforced",
+    underLimit.decision === "allow" &&
+      underLimit.enforcement === "enforced" &&
+      underLimit.reason === "within-limits",
+    `${underLimit.reason}/${underLimit.enforcement}`,
+  );
+
+  const testnetTransfer = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 4000 },
+    policy: strictPolicy,
+    context,
+    networkKind: "testnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "a testnet transfer is not silently allowed but marked not-applicable",
+    testnetTransfer.decision === "uncovered" &&
+      testnetTransfer.enforcement === "not-applicable" &&
+      testnetTransfer.reason === "usd-policy-disabled-on-testnet",
+    `${testnetTransfer.reason}/${testnetTransfer.enforcement}`,
+  );
+
+  const missingPrice = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: null },
+    policy: strictPolicy,
+    context,
+    networkKind: "mainnet",
+    priceAvailability: "unavailable",
+  });
+
+  check(
+    "an unpriced asset on mainnet is blocked, not waved through",
+    missingPrice.decision === "block" &&
+      missingPrice.enforcement === "unavailable" &&
+      missingPrice.reason === "price-unavailable",
+    `${missingPrice.reason}/${missingPrice.enforcement}`,
+  );
+
+  const staleFigure = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 100 },
+    policy: strictPolicy,
+    context,
+    networkKind: "mainnet",
+    priceAvailability: "unavailable",
+  });
+
+  check(
+    "a stale dollar figure is not trusted once the price is unavailable",
+    staleFigure.decision === "block" &&
+      staleFigure.enforcement === "unavailable" &&
+      staleFigure.reason === "price-unavailable",
+    `${staleFigure.reason}/${staleFigure.enforcement}`,
+  );
+
+  check(
+    "a zero price counts as no price, not as a free pass",
+    toAmountUsd("1", 0) === null &&
+      toAmountUsd("1", null) === null &&
+      toAmountUsd("1", Number.NaN) === null &&
+      toAmountUsd("1", -5) === null,
+  );
+
+  check(
+    "a usable price converts the amount, and junk input does not",
+    toAmountUsd("2", 4000) === 8000 &&
+      toAmountUsd("abc", 4000) === null &&
+      toAmountUsd("-1", 4000) === null,
+  );
+
+  const blockingDecisions = [
+    decidePolicy({
+      intent: { kind: "transfer", recipient: stranger, amountUsd: 4000 },
+      policy: strictPolicy,
+      context,
+      networkKind: "mainnet",
+      priceAvailability: "available",
+    }),
+    decidePolicy({
+      intent: { kind: "transfer", recipient: stranger, amountUsd: null },
+      policy: strictPolicy,
+      context,
+      networkKind: "mainnet",
+      priceAvailability: "unavailable",
+    }),
+    decidePolicy({
+      intent: { kind: "transfer", recipient: stranger, amountUsd: 100 },
+      policy: strictPolicy,
+      context: null,
+      networkKind: "mainnet",
+      priceAvailability: "available",
+    }),
+  ];
+
+  check(
+    "every blocking decision carries a message the screen can show",
+    blockingDecisions.every(
+      (item) =>
+        item.decision === "block" &&
+        typeof item.message === "string" &&
+        item.message.length > 0,
+    ),
+    `${blockingDecisions.length} block paths checked`,
+  );
+
+  const noHistory = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 100 },
+    policy: strictPolicy,
+    context: null,
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "unreachable history blocks the transfer instead of skipping the check",
+    noHistory.decision === "block" &&
+      noHistory.enforcement === "unavailable" &&
+      noHistory.reason === "history-unavailable",
+    `${noHistory.reason}/${noHistory.enforcement}`,
+  );
+
+  const guardedPolicy: SecurityPolicy = {
+    ...strictPolicy,
+    maxApprovalExposureUsd: 500,
+    maxSwapLossUsd: 100,
+  };
+
+  const approve = (
+    overrides: Partial<Extract<PolicyIntent, { kind: "approval" }>> = {},
+    policy: SecurityPolicy = guardedPolicy,
+  ) =>
+    decidePolicy({
+      intent: {
+        kind: "approval",
+        spender: stranger,
+        spenderKnown: true,
+        unlimited: false,
+        revoking: false,
+        exposureUsd: 100,
+        ...overrides,
+      },
+      policy,
+      context,
+      networkKind: "mainnet",
+      priceAvailability: "available",
+    });
+
+  check(
+    "an unlimited approval is refused outright",
+    approve({ unlimited: true }).decision === "block" &&
+      approve({ unlimited: true }).reason === "approval-unlimited",
+    approve({ unlimited: true }).reason,
+  );
+
+  check(
+    "a contract the wallet does not recognise cannot be given permission",
+    approve({ spenderKnown: false }).decision === "block" &&
+      approve({ spenderKnown: false }).reason === "approval-unknown-spender",
+    approve({ spenderKnown: false }).reason,
+  );
+
+  check(
+    "an approval worth more than the limit is refused, a smaller one passes",
+    approve({ exposureUsd: 900 }).decision === "block" &&
+      approve({ exposureUsd: 900 }).reason === "approval-over-exposure" &&
+      approve({ exposureUsd: 100 }).decision === "allow",
+    `${approve({ exposureUsd: 900 }).reason} at $900, allow at $100`,
+  );
+
+  check(
+    "taking permission away is never blocked, whatever the limits say",
+    approve({ revoking: true, unlimited: true, spenderKnown: false })
+      .decision === "uncovered" &&
+      approve({ revoking: true, unlimited: true, spenderKnown: false })
+        .reason === "approval-revokes-access",
+    "revoking is always allowed through",
+  );
+
+  check(
+    "an approval on a token with no price is refused while the limit is on",
+    approve({ exposureUsd: null }).decision === "block" &&
+      approve({ exposureUsd: null }).reason === "price-unavailable" &&
+      approve({ exposureUsd: null }, strictPolicy).decision === "allow",
+    "fail-closed only while the approval limit is set",
+  );
+
+  const swapIntent = (
+    overrides: Partial<Extract<PolicyIntent, { kind: "swap" }>> = {},
+    policy: SecurityPolicy = guardedPolicy,
+  ) =>
+    decidePolicy({
+      intent: { kind: "swap", lossUsd: 10, ...overrides },
+      policy,
+      context,
+      networkKind: "mainnet",
+      priceAvailability: "available",
+    });
+
+  check(
+    "a swap whose worst case loses more than the limit is refused",
+    swapIntent({ lossUsd: 400 }).decision === "block" &&
+      swapIntent({ lossUsd: 400 }).reason === "swap-over-loss" &&
+      swapIntent({ lossUsd: 10 }).decision === "allow",
+    swapIntent({ lossUsd: 400 }).reason,
+  );
+
+  check(
+    "a swap priced on one side only is refused while the loss limit is on",
+    swapIntent({ lossUsd: null }).decision === "block" &&
+      swapIntent({ lossUsd: null }).reason === "price-unavailable" &&
+      swapIntent({ lossUsd: null }, strictPolicy).decision === "allow",
+    "fail-closed only while the swap limit is set",
+  );
+
+  const unconfigured = decidePolicy({
+    intent: { kind: "transfer", recipient: stranger, amountUsd: 999_999 },
+    policy: {
+      version: 1,
+      maxSingleTransferUsd: null,
+      newRecipientMaxUsd: null,
+      dailyOutflowLimitUsd: null,
+      maxApprovalExposureUsd: null,
+      blockUnlimitedApprovals: true,
+      blockUnknownSpenders: true,
+      maxSwapLossUsd: null,
+    },
+    context,
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "with no limits configured the pass is labelled not-applicable",
+    unconfigured.decision === "uncovered" &&
+      unconfigured.enforcement === "not-applicable" &&
+      unconfigured.reason === "no-limits-configured",
+    `${unconfigured.reason}/${unconfigured.enforcement}`,
+  );
+
+  check(
+    "an expired Permit2 approval is treated as dead",
+    isPermit2Expired(Math.floor(Date.now() / 1000) - 10) &&
+      !isPermit2Expired(Math.floor(Date.now() / 1000) + 3600),
+  );
+
+  check(
+    "Permit2 revoke calldata is approve(token, spender, 0, 0)",
+    encodePermit2Revoke(
+      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+    ).startsWith("0x87517c45"),
+  );
+
+  check(
+    "Permit2 unlimited is uint160 max",
+    PERMIT2_UNLIMITED === 2n ** 160n - 1n,
+  );
+
+  check(
+    "risk grows from money at risk, not from the approval size",
+    scoreApproval({ unlimited: true, exposureUsd: 5000, spenderKnown: true }) ===
+      "critical" &&
+      scoreApproval({
+        unlimited: true,
+        exposureUsd: 0,
+        spenderKnown: true,
+      }) === "medium" &&
+      scoreApproval({
+        unlimited: false,
+        exposureUsd: 10,
+        spenderKnown: true,
+      }) === "medium" &&
+      scoreApproval({
+        unlimited: false,
+        exposureUsd: 10,
+        spenderKnown: false,
+      }) === "critical",
+  );
+
+  const lifecycleStorage = createMemoryStorage();
+
+  const lifecycleSecrets = createMemorySecretStore();
+
+  const lifecycleEngine = createWalletEngine({
+    storage: lifecycleStorage,
+    secrets: lifecycleSecrets,
+    random: nodeRandom,
+  });
+
+  const first = await lifecycleEngine.prepare();
+
+  const firstAccount = await lifecycleEngine.create(first.recoveryPhrase);
+
+  const second = await lifecycleEngine.prepare();
+
+  const secondAccount = await lifecycleEngine.create(second.recoveryPhrase);
+
+  await lifecycleEngine.remove(firstAccount.id);
+
+  const afterRemoval = await lifecycleEngine.list();
+
+  const activeAfterRemoval = await lifecycleEngine.getActive();
+
+  check(
+    "removal leaves no record without its secret",
+    afterRemoval.length === 1 &&
+      afterRemoval[0].id === secondAccount.id &&
+      (await lifecycleSecrets.load(firstAccount.id)) === null &&
+      (await lifecycleSecrets.load(secondAccount.id)) !== null &&
+      activeAfterRemoval?.id === secondAccount.id,
+  );
+
+  await lifecycleSecrets.remove(secondAccount.id);
+
+  await lifecycleEngine.importFromMnemonic(second.recoveryPhrase);
+
+  check(
+    "re-import restores a lost secret",
+    (await lifecycleSecrets.load(secondAccount.id))?.mnemonic ===
+      second.recoveryPhrase,
+  );
+
+  const failingStorage = createMemoryStorage();
+
+  const failingSecrets = createMemorySecretStore();
+
+  const failingEngine = createWalletEngine({
+    storage: failingStorage,
+    secrets: failingSecrets,
+    random: nodeRandom,
+  });
+
+  const doomed = await failingEngine.prepare();
+
+  const doomedAccount = await failingEngine.create(doomed.recoveryPhrase);
+
+  const originalSet = failingStorage.set.bind(failingStorage);
+
+  failingStorage.set = async (key: string, value: string) => {
+    if (key.includes("registry")) {
+      throw new Error("storage failure");
+    }
+
+    return originalSet(key, value);
+  };
+
+  try {
+    await failingEngine.remove(doomedAccount.id);
+  } catch {
+  }
+
+  failingStorage.set = originalSet;
+
+  const survivors = await failingEngine.list();
+
+  const secretsIntact = await Promise.all(
+    survivors.map(async (wallet) => (await failingSecrets.load(wallet.id)) !== null),
+  );
+
+  check(
+    "a failure during removal leaves no wallet without its secret",
+    secretsIntact.every(Boolean),
+    `in registry ${survivors.length}, secrets intact: ${secretsIntact.every(Boolean)}`,
+  );
+
+  type CrashStores = {
+    kv: Map<string, string>;
+    sec: Map<string, WalletSecret>;
+    storage: KeyValueStorage;
+    secrets: SecretStore;
+    writes: () => number;
+  };
+
+  function createCrashStores(failAtWrite: number | null): CrashStores {
+    const kv = new Map<string, string>();
+
+    const sec = new Map<string, WalletSecret>();
+
+    let writes = 0;
+
+    function bump() {
+      writes += 1;
+
+      if (failAtWrite !== null && writes === failAtWrite) {
+        throw new Error("device died mid-write");
+      }
+    }
+
+    return {
+      kv,
+      sec,
+      writes: () => writes,
+
+      storage: {
+        async get(key) {
+          return kv.get(key) ?? null;
+        },
+        async set(key, value) {
+          bump();
+          kv.set(key, value);
+        },
+        async remove(key) {
+          bump();
+          kv.delete(key);
+        },
+      },
+
+      secrets: {
+        async load(walletId) {
+          return sec.get(walletId) ?? null;
+        },
+        async save(walletId, secret) {
+          bump();
+          sec.set(walletId, secret);
+        },
+        async remove(walletId) {
+          bump();
+          sec.delete(walletId);
+        },
+      },
+    };
+  }
+
+  function inspectState(stores: CrashStores) {
+    const registry = JSON.parse(
+      stores.kv.get("wallet.registry.v1") ?? "[]",
+    ) as WalletAccountShape[];
+
+    const ids = registry.map((wallet) => wallet.id);
+
+    const secretIds = [...stores.sec.keys()];
+
+    const active = stores.kv.get("wallet.active.v1") ?? null;
+
+    return {
+      orphanSecrets: secretIds.filter((id) => !ids.includes(id)),
+
+      entriesWithoutSecret: ids.filter((id) => !secretIds.includes(id)),
+
+      activeDangling:
+        registry.length === 0
+          ? active !== null
+          : active !== null && !ids.includes(active),
+
+      journalLeft: stores.kv.has("wallet.journal.v1"),
+
+      size: registry.length,
+    };
+  }
+
+  const crashPhrase = (await createWalletEngine({
+    storage: createMemoryStorage(),
+    secrets: createMemorySecretStore(),
+    random: nodeRandom,
+  }).prepare()).recoveryPhrase;
+
+  const createBreakages: string[] = [];
+
+  for (let failAt = 1; failAt <= 8; failAt++) {
+    const stores = createCrashStores(failAt);
+
+    const dying = createWalletEngine({
+      storage: stores.storage,
+      secrets: stores.secrets,
+      random: nodeRandom,
+    });
+
+    try {
+      await dying.create(crashPhrase);
+    } catch {
+      void 0;
+    }
+
+    const revived = createWalletEngine({
+      storage: { ...stores.storage },
+      secrets: { ...stores.secrets },
+      random: nodeRandom,
+    });
+
+    await revived.initialize();
+
+    const state = inspectState(stores);
+
+    if (
+      state.orphanSecrets.length > 0 ||
+      state.entriesWithoutSecret.length > 0 ||
+      state.activeDangling ||
+      state.journalLeft
+    ) {
+      createBreakages.push(
+        `create@${failAt}: orphans=${state.orphanSecrets.length} zombies=${state.entriesWithoutSecret.length} dangling=${state.activeDangling} journal=${state.journalLeft}`,
+      );
+    }
+  }
+
+  check(
+    "killing the app after any single write during create always reconciles",
+    createBreakages.length === 0,
+    createBreakages[0] ?? "8 crash points swept",
+  );
+
+  const removeBreakages: string[] = [];
+
+  for (let failAt = 1; failAt <= 8; failAt++) {
+    const stores = createCrashStores(null);
+
+    const seeded = createWalletEngine({
+      storage: stores.storage,
+      secrets: stores.secrets,
+      random: nodeRandom,
+    });
+
+    const victim = await seeded.create(crashPhrase);
+
+    let counter = 0;
+
+    const armed = createWalletEngine({
+      storage: {
+        async get(key) {
+          return stores.storage.get(key);
+        },
+        async set(key, value) {
+          counter += 1;
+          if (counter === failAt) throw new Error("device died mid-write");
+          return stores.storage.set(key, value);
+        },
+        async remove(key) {
+          counter += 1;
+          if (counter === failAt) throw new Error("device died mid-write");
+          return stores.storage.remove(key);
+        },
+      },
+      secrets: {
+        async load(walletId) {
+          return stores.secrets.load(walletId);
+        },
+        async save(walletId, secret) {
+          counter += 1;
+          if (counter === failAt) throw new Error("device died mid-write");
+          return stores.secrets.save(walletId, secret);
+        },
+        async remove(walletId) {
+          counter += 1;
+          if (counter === failAt) throw new Error("device died mid-write");
+          return stores.secrets.remove(walletId);
+        },
+      },
+      random: nodeRandom,
+    });
+
+    try {
+      await armed.remove(victim.id);
+    } catch {
+      void 0;
+    }
+
+    const revived = createWalletEngine({
+      storage: stores.storage,
+      secrets: stores.secrets,
+      random: nodeRandom,
+    });
+
+    await revived.initialize();
+
+    const state = inspectState(stores);
+
+    if (
+      state.orphanSecrets.length > 0 ||
+      state.entriesWithoutSecret.length > 0 ||
+      state.activeDangling ||
+      state.journalLeft
+    ) {
+      removeBreakages.push(
+        `remove@${failAt}: orphans=${state.orphanSecrets.length} zombies=${state.entriesWithoutSecret.length} dangling=${state.activeDangling} journal=${state.journalLeft}`,
+      );
+    }
+  }
+
+  check(
+    "killing the app after any single write during remove always reconciles",
+    removeBreakages.length === 0,
+    removeBreakages[0] ?? "8 crash points swept",
+  );
+
+  const raceStores = createCrashStores(null);
+
+  const raceEngine = createWalletEngine({
+    storage: raceStores.storage,
+    secrets: raceStores.secrets,
+    random: nodeRandom,
+  });
+
+  const firstPhrase = (await raceEngine.prepare()).recoveryPhrase;
+
+  const secondPhrase = (await raceEngine.prepare()).recoveryPhrase;
+
+  await Promise.all([
+    raceEngine.create(firstPhrase),
+    raceEngine.create(secondPhrase),
+  ]);
+
+  const raceState = inspectState(raceStores);
+
+  check(
+    "two concurrent creates do not lose a wallet to read-modify-write",
+    raceState.size === 2 &&
+      raceState.orphanSecrets.length === 0 &&
+      raceState.entriesWithoutSecret.length === 0,
+    `registry ${raceState.size}, orphans ${raceState.orphanSecrets.length}`,
+  );
+
+  const interleaveStores = createCrashStores(null);
+
+  const yieldTurn = () => new Promise((resolve) => setTimeout(resolve, 1));
+
+  const slowStorage: KeyValueStorage = {
+    async get(key) {
+      await yieldTurn();
+
+      return interleaveStores.storage.get(key);
+    },
+    async set(key, value) {
+      await yieldTurn();
+
+      return interleaveStores.storage.set(key, value);
+    },
+    async remove(key) {
+      await yieldTurn();
+
+      return interleaveStores.storage.remove(key);
+    },
+  };
+
+  const interleaveEngine = createWalletEngine({
+    storage: slowStorage,
+    secrets: interleaveStores.secrets,
+    random: nodeRandom,
+  });
+
+  const doomedWallet = await interleaveEngine.create(
+    (await interleaveEngine.prepare()).recoveryPhrase,
+  );
+
+  const keptWallet = await interleaveEngine.create(
+    (await interleaveEngine.prepare()).recoveryPhrase,
+  );
+
+  interleaveStores.kv.set("wallet.active.v1", "0xghost");
+
+  const [, activeDuringRemoval] = await Promise.all([
+    interleaveEngine.remove(doomedWallet.id),
+    interleaveEngine.getActive(),
+  ]);
+
+  const interleaved = inspectState(interleaveStores);
+
+  check(
+    "reading the active wallet while another is being removed cannot point at a ghost",
+    !interleaved.activeDangling &&
+      interleaved.orphanSecrets.length === 0 &&
+      activeDuringRemoval?.id === keptWallet.id,
+    `dangling: ${interleaved.activeDangling}, returned: ${
+      activeDuringRemoval?.id === doomedWallet.id ? "removed wallet" : "kept"
+    }`,
+  );
+
+  const rollbackStores = createCrashStores(null);
+
+  const rollbackEngine = createWalletEngine({
+    storage: rollbackStores.storage,
+    secrets: rollbackStores.secrets,
+    random: nodeRandom,
+  });
+
+  const survivor = await rollbackEngine.create(
+    (await rollbackEngine.prepare()).recoveryPhrase,
+  );
+
+  const bystander = await rollbackEngine.create(
+    (await rollbackEngine.prepare()).recoveryPhrase,
+  );
+
+  rollbackStores.kv.set(
+    "wallet.journal.v1",
+    JSON.stringify({
+      op: "remove",
+      walletId: survivor.id,
+      address: survivor.address,
+      name: survivor.name,
+      before: [survivor.id, bystander.id].map((id) => id.toLowerCase()).sort().join(","),
+      after: [bystander.id.toLowerCase()].join(","),
+    }),
+  );
+
+  const thirdWallet = await createWalletEngine({
+    storage: rollbackStores.storage,
+    secrets: rollbackStores.secrets,
+    random: nodeRandom,
+  }).prepare();
+
+  const registryNow = JSON.parse(
+    rollbackStores.kv.get("wallet.registry.v1") ?? "[]",
+  ) as WalletAccountShape[];
+
+  rollbackStores.kv.set(
+    "wallet.registry.v1",
+    JSON.stringify([
+      ...registryNow,
+      {
+        id: thirdWallet.address.toLowerCase(),
+        name: "Wallet 3",
+        address: thirdWallet.address,
+      },
+    ]),
+  );
+
+  await createWalletEngine({
+    storage: rollbackStores.storage,
+    secrets: rollbackStores.secrets,
+    random: nodeRandom,
+  }).initialize();
+
+  const survivorSecret = await rollbackStores.secrets.load(survivor.id);
+
+  const registryAfterRollback = JSON.parse(
+    rollbackStores.kv.get("wallet.registry.v1") ?? "[]",
+  ) as WalletAccountShape[];
+
+  check(
+    "a journal written against a state that moved on does not delete a live wallet",
+    survivorSecret !== null &&
+      registryAfterRollback.some((wallet) => wallet.id === survivor.id) &&
+      !rollbackStores.kv.has("wallet.journal.v1"),
+    survivorSecret === null ? "secret was destroyed" : "secret kept, journal cleared",
+  );
+
+  const staleStores = createCrashStores(null);
+
+  const staleEngine = createWalletEngine({
+    storage: staleStores.storage,
+    secrets: staleStores.secrets,
+    random: nodeRandom,
+  });
+
+  const staleVictim = await staleEngine.create(
+    (await staleEngine.prepare()).recoveryPhrase,
+  );
+
+  const staleCompanion = await staleEngine.create(
+    (await staleEngine.prepare()).recoveryPhrase,
+  );
+
+  staleStores.kv.set(
+    "wallet.journal.v1",
+    JSON.stringify({
+      op: "remove",
+      walletId: staleVictim.id,
+      address: staleVictim.address,
+      name: staleVictim.name,
+      before: [staleVictim.id, staleCompanion.id]
+        .map((id) => id.toLowerCase())
+        .sort()
+        .join(","),
+      after: staleCompanion.id.toLowerCase(),
+      writtenAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
+    }),
+  );
+
+  await createWalletEngine({
+    storage: staleStores.storage,
+    secrets: staleStores.secrets,
+    random: nodeRandom,
+  }).initialize();
+
+  check(
+    "a journal older than the trust window is not replayed against a wallet the user kept using",
+    (await staleStores.secrets.load(staleVictim.id)) !== null &&
+      !staleStores.kv.has("wallet.journal.v1"),
+    (await staleStores.secrets.load(staleVictim.id)) === null
+      ? "secret was destroyed"
+      : "secret kept",
+  );
+
+  const MAINNET = "eth-mainnet";
+
+  const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+
+  const ROUTER = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45";
+
+  const UNIVERSAL = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
+
+  const directSpenders = getKnownSpenders(MAINNET);
+
+  const permit2Spenders = getPermit2Spenders(MAINNET);
+
+  function approvalsClient(options: {
+    token: Address;
+    direct: Record<string, bigint>;
+    permit2?: Record<string, { amount: bigint; expiration: number }>;
+  }) {
+    return {
+      async multicall({ contracts }: { contracts: { address: string; args: readonly unknown[] }[] }) {
+        return contracts.map((call) => {
+          if (call.address.toLowerCase() === PERMIT2.toLowerCase()) {
+            const spender = String(call.args[2]).toLowerCase();
+
+            const entry = options.permit2?.[spender];
+
+            return entry
+              ? {
+                  status: "success" as const,
+                  result: [entry.amount, entry.expiration, 0] as const,
+                }
+              : { status: "success" as const, result: [0n, 0, 0] as const };
+          }
+
+          const spender = String(call.args[1]).toLowerCase();
+
+          return {
+            status: "success" as const,
+            result: options.direct[spender] ?? 0n,
+          };
+        });
+      },
+    } as unknown as Parameters<typeof getApprovals>[3];
+  }
+
+  const usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+
+  function usdcAsset(balance: string, priceUsd: number | null = 1) {
+    return {
+      type: "erc20" as const,
+      symbol: "USDC",
+      name: "USD Coin",
+      balance,
+      decimals: 6,
+      priceUsd,
+      valueUsd: priceUsd === null ? null : Number(balance) * priceUsd,
+      logo: null,
+      contractAddress: usdc,
+    };
+  }
+
+  const future = Math.floor(Date.now() / 1000) + 86_400;
+
+  const twoSpenders = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: {
+        [ROUTER.toLowerCase()]: 8_000_000_000n,
+        [UNIVERSAL.toLowerCase()]: 8_000_000_000n,
+      },
+    }),
+  );
+
+  check(
+    "two spenders draining in turn can take the whole balance, and the total says so",
+    twoSpenders.approvals.length === 2 &&
+      twoSpenders.totalExposureUsd === 10000,
+    `exposure $${twoSpenders.totalExposureUsd} on a $10000 balance`,
+  );
+
+  check(
+    "each approval row names the spender it belongs to",
+    twoSpenders.approvals.some(
+      (row) => row.spender.toLowerCase() === ROUTER.toLowerCase(),
+    ) &&
+      twoSpenders.approvals.some(
+        (row) => row.spender.toLowerCase() === UNIVERSAL.toLowerCase(),
+      ) &&
+      twoSpenders.approvals.every((row) => row.id.includes(row.spender.toLowerCase())),
+    twoSpenders.approvals.map((row) => row.spenderName).join(" + "),
+  );
+
+  const halfEach = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: {
+        [ROUTER.toLowerCase()]: 3_000_000_000n,
+        [UNIVERSAL.toLowerCase()]: 2_000_000_000n,
+      },
+    }),
+  );
+
+  check(
+    "partial allowances add up instead of collapsing to the largest one",
+    halfEach.totalExposureUsd === 5000,
+    `exposure $${halfEach.totalExposureUsd} (3000 + 2000)`,
+  );
+
+  const bothChannels = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: {
+        [ROUTER.toLowerCase()]: 10_000_000_000n,
+        [PERMIT2.toLowerCase()]: 10_000_000_000n,
+      },
+      permit2: {
+        [UNIVERSAL.toLowerCase()]: { amount: 10_000_000_000n, expiration: future },
+      },
+    }),
+  );
+
+  check(
+    "the same balance is never counted twice across channels",
+    bothChannels.totalExposureUsd === 10000,
+    `exposure $${bothChannels.totalExposureUsd} across ${bothChannels.approvals.length} approvals`,
+  );
+
+  const expired = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [PERMIT2.toLowerCase()]: 10_000_000_000n },
+      permit2: {
+        [UNIVERSAL.toLowerCase()]: {
+          amount: 10_000_000_000n,
+          expiration: Math.floor(Date.now() / 1000) - 60,
+        },
+      },
+    }),
+  );
+
+  check(
+    "an expired Permit2 permission counts as dead, not as exposure",
+    expired.expiredCount === 1 &&
+      expired.approvals.every((item) => item.channel !== "permit2"),
+    `expired ${expired.expiredCount}`,
+  );
+
+  const cappedByBudget = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [PERMIT2.toLowerCase()]: 100_000_000n },
+      permit2: {
+        [UNIVERSAL.toLowerCase()]: { amount: 9_000_000_000n, expiration: future },
+      },
+    }),
+  );
+
+  const permit2Row = cappedByBudget.approvals.find(
+    (item) => item.channel === "permit2",
+  );
+
+  check(
+    "a Permit2 permission larger than its ERC-20 budget is capped by the budget",
+    permit2Row?.exposureUsd === 100 && cappedByBudget.totalExposureUsd === 100,
+    `row $${permit2Row?.exposureUsd}, total $${cappedByBudget.totalExposureUsd}`,
+  );
+
+  const overBalance = await getApprovals(
+    generated.address,
+    [usdcAsset("250")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [ROUTER.toLowerCase()]: 999_999_000_000n },
+    }),
+  );
+
+  check(
+    "an allowance larger than the balance cannot risk more than the balance",
+    overBalance.totalExposureUsd === 250,
+    `exposure $${overBalance.totalExposureUsd}`,
+  );
+
+  const budgetOnly = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [PERMIT2.toLowerCase()]: 10_000_000_000n },
+    }),
+  );
+
+  check(
+    "a live Permit2 budget with no permissions yet is still counted as money at risk",
+    budgetOnly.totalExposureUsd === 10000 &&
+      budgetOnly.approvals[0]?.exposureUsd === 10000,
+    `total $${budgetOnly.totalExposureUsd}, row $${budgetOnly.approvals[0]?.exposureUsd}`,
+  );
+
+  const crossChannel = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: {
+        [ROUTER.toLowerCase()]: 4_000_000_000n,
+        [PERMIT2.toLowerCase()]: 3_000_000_000n,
+      },
+      permit2: {
+        [UNIVERSAL.toLowerCase()]: { amount: 3_000_000_000n, expiration: future },
+      },
+    }),
+  );
+
+  check(
+    "a router allowance and a Permit2 budget add up instead of one hiding the other",
+    crossChannel.totalExposureUsd === 7000,
+    `exposure $${crossChannel.totalExposureUsd} (4000 router + 3000 permit2 budget)`,
+  );
+
+  const unreadBudgetSum = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    {
+      async multicall({ contracts }: { contracts: { address: string; args: readonly unknown[] }[] }) {
+        return contracts.map((call) => {
+          if (call.address.toLowerCase() === PERMIT2.toLowerCase()) {
+            return String(call.args[2]).toLowerCase() === UNIVERSAL.toLowerCase()
+              ? {
+                  status: "success" as const,
+                  result: [3_000_000_000n, future, 0] as const,
+                }
+              : { status: "success" as const, result: [0n, 0, 0] as const };
+          }
+
+          const spender = String(call.args[1]).toLowerCase();
+
+          if (spender === PERMIT2.toLowerCase()) {
+            return { status: "failure" as const, error: new Error("node hiccup") };
+          }
+
+          return {
+            status: "success" as const,
+            result: spender === ROUTER.toLowerCase() ? 4_000_000_000n : 0n,
+          };
+        });
+      },
+    } as unknown as Parameters<typeof getApprovals>[3],
+  );
+
+  check(
+    "when the Permit2 budget cannot be read its permissions add to the direct ones, not replace them",
+    unreadBudgetSum.totalExposureUsd === 7000,
+    `exposure $${unreadBudgetSum.totalExposureUsd} (4000 direct + 3000 permit2 with unknown budget)`,
+  );
+
+  let directTruncationError: string | null = null;
+
+  try {
+    await getApprovals(
+      generated.address,
+      [usdcAsset("10000")],
+      MAINNET,
+      {
+        async multicall({ contracts }: { contracts: { address: string }[] }) {
+          const isPermit2 =
+            contracts[0]?.address.toLowerCase() === PERMIT2.toLowerCase();
+
+          return isPermit2
+            ? contracts.map(() => ({
+                status: "success" as const,
+                result: [0n, 0, 0] as const,
+              }))
+            : contracts.slice(1).map(() => ({
+                status: "success" as const,
+                result: 0n,
+              }));
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+    );
+  } catch (error) {
+    directTruncationError = error instanceof Error ? error.message : "unknown";
+  }
+
+  check(
+    "a short answer on the direct half is caught too, not only on the Permit2 half",
+    directTruncationError !== null &&
+      directTruncationError.includes("fewer results"),
+    directTruncationError ?? "no error",
+  );
+
+  let permit2TruncationError: string | null = null;
+
+  try {
+    await getApprovals(
+      generated.address,
+      [usdcAsset("10000")],
+      MAINNET,
+      {
+        async multicall({ contracts }: { contracts: { address: string }[] }) {
+          const isPermit2 =
+            contracts[0]?.address.toLowerCase() === PERMIT2.toLowerCase();
+
+          return isPermit2
+            ? contracts.slice(1).map(() => ({
+                status: "success" as const,
+                result: [0n, 0, 0] as const,
+              }))
+            : contracts.map(() => ({
+                status: "success" as const,
+                result: 0n,
+              }));
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+    );
+  } catch (error) {
+    permit2TruncationError = error instanceof Error ? error.message : "unknown";
+  }
+
+  check(
+    "a short answer on the Permit2 half is caught too, not only on the direct half",
+    permit2TruncationError !== null &&
+      permit2TruncationError.includes("fewer results"),
+    permit2TruncationError ?? "no error",
+  );
+
+  const heldButUnpriced = await getApprovals(
+    generated.address,
+    [usdcAsset("5000", null)],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [ROUTER.toLowerCase()]: 1_000_000_000n },
+    }),
+  );
+
+  const emptyAndUnpriced = await getApprovals(
+    generated.address,
+    [usdcAsset("0", null)],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [ROUTER.toLowerCase()]: 1_000_000_000n },
+    }),
+  );
+
+  check(
+    "holding an unpriced token is scored higher than holding none of it",
+    heldButUnpriced.approvals[0]?.risk === "medium" &&
+      emptyAndUnpriced.approvals[0]?.risk === "low",
+    `held: ${heldButUnpriced.approvals[0]?.risk}, empty: ${emptyAndUnpriced.approvals[0]?.risk}`,
+  );
+
+  check(
+    "an unpriced approval on a wallet that holds the token is scored above one that does not",
+    scoreApproval({
+      unlimited: false,
+      exposureUsd: null,
+      spenderKnown: true,
+      holdsTokens: true,
+    }) === "medium" &&
+      scoreApproval({
+        unlimited: false,
+        exposureUsd: null,
+        spenderKnown: true,
+        holdsTokens: false,
+      }) === "low" &&
+      scoreApproval({
+        unlimited: true,
+        exposureUsd: null,
+        spenderKnown: true,
+        holdsTokens: true,
+      }) === "high",
+    "unknown price is not silently treated as zero",
+  );
+
+  const unknownBudget = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    {
+      async multicall({ contracts }: { contracts: { address: string; args: readonly unknown[] }[] }) {
+        return contracts.map((call) => {
+          if (call.address.toLowerCase() === PERMIT2.toLowerCase()) {
+            const spender = String(call.args[2]).toLowerCase();
+
+            return spender === UNIVERSAL.toLowerCase()
+              ? {
+                  status: "success" as const,
+                  result: [9_000_000_000n, future, 0] as const,
+                }
+              : { status: "success" as const, result: [0n, 0, 0] as const };
+          }
+
+          if (String(call.args[1]).toLowerCase() === PERMIT2.toLowerCase()) {
+            return { status: "failure" as const, error: new Error("node hiccup") };
+          }
+
+          return { status: "success" as const, result: 0n };
+        });
+      },
+    } as unknown as Parameters<typeof getApprovals>[3],
+  );
+
+  check(
+    "a Permit2 row whose budget could not be read is flagged as uncertain",
+    unknownBudget.uncertainCount === 1 &&
+      unknownBudget.approvals.every((row) => !row.exposureCertain),
+    `uncertain rows: ${unknownBudget.uncertainCount}`,
+  );
+
+  const unpriced = await getApprovals(
+    generated.address,
+    [usdcAsset("10000", null)],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [ROUTER.toLowerCase()]: 2n ** 256n - 1n },
+    }),
+  );
+
+  check(
+    "an unlimited approval on a token with no price is not scored as harmless",
+    unpriced.approvals[0]?.risk !== "low" &&
+      unpriced.approvals[0]?.exposureCertain === false &&
+      unpriced.totalExposureUsd === 0,
+    `risk ${unpriced.approvals[0]?.risk}, certain ${unpriced.approvals[0]?.exposureCertain}`,
+  );
+
+  let truncatedError: string | null = null;
+
+  try {
+    await getApprovals(
+      generated.address,
+      [usdcAsset("10000")],
+      MAINNET,
+      {
+        async multicall({ contracts }: { contracts: unknown[] }) {
+          return contracts.slice(1).map(() => ({
+            status: "success" as const,
+            result: 0n,
+          }));
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+    );
+  } catch (error) {
+    truncatedError = error instanceof Error ? error.message : "unknown";
+  }
+
+  check(
+    "a short answer from the node fails loudly instead of reporting no risk",
+    truncatedError !== null && truncatedError.includes("fewer results"),
+    truncatedError ?? "no error",
+  );
+
+  const emptyWallet = await getApprovals(
+    generated.address,
+    [usdcAsset("0")],
+    MAINNET,
+    approvalsClient({
+      token: usdc,
+      direct: { [ROUTER.toLowerCase()]: 2n ** 256n - 1n },
+    }),
+  );
+
+  check(
+    "an unlimited approval on an empty balance is listed but risks nothing",
+    emptyWallet.approvals.length === 1 &&
+      emptyWallet.approvals[0].unlimited &&
+      emptyWallet.totalExposureUsd === 0,
+    `exposure $${emptyWallet.totalExposureUsd}, risk ${emptyWallet.approvals[0]?.risk}`,
+  );
+
+  check(
+    "the spender count reports distinct contracts, not calls",
+    twoSpenders.checkedSpenders ===
+      new Set(
+        [
+          ...directSpenders.map((item) => item.address.toLowerCase()),
+          ...permit2Spenders.map((item) => item.toLowerCase()),
+        ],
+      ).size,
+    `${twoSpenders.checkedSpenders} distinct`,
+  );
+
+  const sixDecimals = normalizeTokenBalance("0x3b9aca00", 6);
+
+  const missingDecimals = normalizeTokenBalance("0x1bc16d674ec80000", undefined);
+
+  const garbageBalance = normalizeTokenBalance("0xzz", 18);
+
+  const upperCaseHex = normalizeTokenBalance("0X3B9ACA00", 6);
+
+  check(
+    "a hex balance is never handed on as a number, in any case or without decimals",
+    sixDecimals.balance === "1000" &&
+      upperCaseHex.balance === "1000" &&
+      Number(missingDecimals.balance) === 2 &&
+      garbageBalance.balance === "0",
+    `6dp: ${sixDecimals.balance}, 0X: ${upperCaseHex.balance}, unknown dp: ${missingDecimals.balance}`,
+  );
+
+  check(
+    "a token whose decimals are unknown does not get an invented dollar value",
+    missingDecimals.decimalsKnown === false && sixDecimals.decimalsKnown === true,
+    `known: ${sixDecimals.decimalsKnown}, unknown: ${missingDecimals.decimalsKnown}`,
+  );
+
+  const vaultDeviceKey = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const vaultPinKey = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const vaultMaster = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const vaultWalletId = created.account.id;
+
+  const slot = wrapMasterKey({
+    masterKey: vaultMaster,
+    deviceKey: vaultDeviceKey,
+    pinKey: vaultPinKey,
+    kekSalt: webcrypto.getRandomValues(new Uint8Array(16)),
+    wrapNonce: webcrypto.getRandomValues(new Uint8Array(24)),
+  });
+
+  const sealed = sealWalletVault({
+    mnemonic: generated.mnemonic,
+    walletId: vaultWalletId,
+    masterKey: vaultMaster,
+    wrapNonce: webcrypto.getRandomValues(new Uint8Array(24)),
+    nonce: webcrypto.getRandomValues(new Uint8Array(24)),
+    dek: webcrypto.getRandomValues(new Uint8Array(32)),
+  });
+
+  check(
+    "a sealed wallet opens with the master key and holds no readable phrase",
+    openWalletVault({
+      vault: sealed,
+      walletId: vaultWalletId,
+      masterKey: vaultMaster,
+    }) === generated.mnemonic &&
+      !JSON.stringify(sealed).includes(generated.mnemonic) &&
+      /^[0-9a-f]+$/.test(sealed.ciphertext) &&
+      !JSON.stringify(sealed).includes(" "),
+    "round trip clean, envelope is opaque bytes",
+  );
+
+  check(
+    "the master key itself is only reachable with the right PIN on the right device",
+    (() => {
+      const opened = unwrapMasterKey({
+        slot,
+        deviceKey: vaultDeviceKey,
+        pinKey: vaultPinKey,
+      });
+
+      const wrongPin = (() => {
+        try {
+          unwrapMasterKey({
+            slot,
+            deviceKey: vaultDeviceKey,
+            pinKey: webcrypto.getRandomValues(new Uint8Array(32)),
+          });
+
+          return false;
+        } catch (error) {
+          return error instanceof VaultKeyError;
+        }
+      })();
+
+      const wrongDevice = (() => {
+        try {
+          unwrapMasterKey({
+            slot,
+            deviceKey: webcrypto.getRandomValues(new Uint8Array(32)),
+            pinKey: vaultPinKey,
+          });
+
+          return false;
+        } catch (error) {
+          return error instanceof VaultKeyError;
+        }
+      })();
+
+      return (
+        bytesToHex(opened) === bytesToHex(vaultMaster) && wrongPin && wrongDevice
+      );
+    })(),
+    "PIN factor and device factor are both required",
+  );
+
+  function refusesToOpen(label: string, open: () => string) {
+    let failure: unknown = null;
+
+    try {
+      open();
+    } catch (error) {
+      failure = error;
+    }
+
+    check(
+      label,
+      failure instanceof VaultOpenError,
+      failure instanceof Error ? failure.name : "opened anyway",
+    );
+  }
+
+  refusesToOpen("another master key cannot open the sealed wallet", () =>
+    openWalletVault({
+      vault: sealed,
+      walletId: vaultWalletId,
+      masterKey: webcrypto.getRandomValues(new Uint8Array(32)),
+    }),
+  );
+
+  refusesToOpen("a sealed wallet cannot be replayed under another wallet id", () =>
+    openWalletVault({
+      vault: sealed,
+      walletId: "0x0000000000000000000000000000000000000001",
+      masterKey: vaultMaster,
+    }),
+  );
+
+  refusesToOpen("editing the ciphertext breaks the seal", () =>
+    openWalletVault({
+      vault: {
+        ...sealed,
+        ciphertext:
+          (sealed.ciphertext[0] === "0" ? "1" : "0") +
+          sealed.ciphertext.slice(1),
+      },
+      walletId: vaultWalletId,
+      masterKey: vaultMaster,
+    }),
+  );
+
+  refusesToOpen("swapping the nonce breaks the seal", () =>
+    openWalletVault({
+      vault: { ...sealed, nonce: bytesToHex(webcrypto.getRandomValues(new Uint8Array(24))) },
+      walletId: vaultWalletId,
+      masterKey: vaultMaster,
+    }),
+  );
+
+  check(
+    "a damaged envelope or key slot is refused by the parser, not half-read",
+    parseWalletVault({ ...sealed, wrapped: 42 }) === null &&
+      parseWalletVault({ ...sealed, nonce: "zz" }) === null &&
+      parseWalletVault({ ...sealed, version: 1 }) === null &&
+      parseWalletVault(sealed)?.version === 2 &&
+      parseVaultKeySlot(JSON.stringify({ ...slot, kekSalt: "abc" })) === null &&
+      parseVaultKeySlot(serializeVaultKeySlot(slot))?.version === 2,
+    "malformed input never reaches the cipher",
+  );
+
+  const rotatedPinKey = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const rotated = wrapMasterKey({
+    masterKey: vaultMaster,
+    deviceKey: vaultDeviceKey,
+    pinKey: rotatedPinKey,
+    kekSalt: webcrypto.getRandomValues(new Uint8Array(16)),
+    wrapNonce: webcrypto.getRandomValues(new Uint8Array(24)),
+  });
+
+  const oldPinRejected = (() => {
+    try {
+      unwrapMasterKey({
+        slot: rotated,
+        deviceKey: vaultDeviceKey,
+        pinKey: vaultPinKey,
+      });
+
+      return false;
+    } catch {
+      return true;
+    }
+  })();
+
+  check(
+    "changing the PIN rewraps one key slot and leaves every wallet envelope untouched",
+    openWalletVault({
+      vault: sealed,
+      walletId: vaultWalletId,
+      masterKey: unwrapMasterKey({
+        slot: rotated,
+        deviceKey: vaultDeviceKey,
+        pinKey: rotatedPinKey,
+      }),
+    }) === generated.mnemonic && oldPinRejected,
+    "same envelope, new slot, old PIN refused",
+  );
+
+  const vaultBlobs = new Map<string, string>();
+
+  const held = { masterKey: null as Uint8Array | null };
+
+  const vaultStore: SecretStore = {
+    async load(walletId) {
+      const raw = vaultBlobs.get(walletId);
+
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = parseWalletVault(JSON.parse(raw));
+
+      if (!parsed) {
+        return JSON.parse(raw) as WalletSecret;
+      }
+
+      if (!held.masterKey) {
+        throw new Error("Enter your PIN to unlock this wallet");
+      }
+
+      return {
+        version: 1 as const,
+        mnemonic: openWalletVault({
+          vault: parsed,
+          walletId,
+          masterKey: held.masterKey,
+        }),
+      };
+    },
+
+    async save(walletId, secret) {
+      vaultBlobs.set(
+        walletId,
+        held.masterKey
+          ? JSON.stringify(
+              sealWalletVault({
+                mnemonic: secret.mnemonic,
+                walletId,
+                masterKey: held.masterKey,
+                wrapNonce: webcrypto.getRandomValues(new Uint8Array(24)),
+                nonce: webcrypto.getRandomValues(new Uint8Array(24)),
+                dek: webcrypto.getRandomValues(new Uint8Array(32)),
+              }),
+            )
+          : JSON.stringify(secret),
+      );
+    },
+
+    async remove(walletId) {
+      vaultBlobs.delete(walletId);
+    },
+  };
+
+  const vaultEngine = createWalletEngine({
+    storage: createMemoryStorage(),
+    secrets: vaultStore,
+    random: nodeRandom,
+  });
+
+  const prePin = await vaultEngine.prepare();
+
+  const vaultedAccount = await vaultEngine.create(prePin.recoveryPhrase);
+
+  check(
+    "a wallet created before any PIN exists is stored in the clear",
+    vaultBlobs.get(vaultedAccount.id)?.includes(prePin.recoveryPhrase) === true,
+    "no PIN yet means no envelope",
+  );
+
+  held.masterKey = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const carriedOver = await vaultStore.load(vaultedAccount.id);
+
+  await vaultStore.save(vaultedAccount.id, carriedOver!);
+
+  check(
+    "setting a PIN seals wallets that were already there and the phrase disappears",
+    vaultBlobs.get(vaultedAccount.id)?.includes(prePin.recoveryPhrase) === false &&
+      (await vaultStore.load(vaultedAccount.id))?.mnemonic ===
+        prePin.recoveryPhrase,
+    "sealed in place",
+  );
+
+  const heldKey = held.masterKey;
+
+  held.masterKey = null;
+
+  let lockedRead: unknown = null;
+
+  try {
+    await vaultStore.load(vaultedAccount.id);
+  } catch (error) {
+    lockedRead = error;
+  }
+
+  check(
+    "a locked wallet refuses to hand over the phrase at all",
+    lockedRead instanceof Error,
+    lockedRead instanceof Error ? lockedRead.message : "handed it over",
+  );
+
+  held.masterKey = webcrypto.getRandomValues(new Uint8Array(32));
+
+  let strangerRead: unknown = null;
+
+  try {
+    await vaultStore.load(vaultedAccount.id);
+  } catch (error) {
+    strangerRead = error;
+  }
+
+  check(
+    "storage copied to a device with a different key does not give up the phrase",
+    strangerRead instanceof VaultOpenError,
+    strangerRead instanceof Error ? strangerRead.name : "opened anyway",
+  );
+
+  held.masterKey = heldKey;
+
+  check(
+    "the wallet still opens once the right key is back",
+    (await vaultStore.load(vaultedAccount.id))?.mnemonic ===
+      prePin.recoveryPhrase,
+    "recovered",
+  );
+
+  function makeSlots(failAtWrite: number | null = null) {
+    const values = new Map<string, string>();
+
+    let writes = 0;
+
+    const bump = () => {
+      writes += 1;
+
+      if (failAtWrite !== null && writes === failAtWrite) {
+        throw new Error("device died mid-write");
+      }
+    };
+
+    return {
+      values,
+
+      store: {
+        async readSlot() {
+          return values.get("slot") ?? null;
+        },
+        async writeSlot(value: string) {
+          bump();
+          values.set("slot", value);
+        },
+        async readPending() {
+          return values.get("pending") ?? null;
+        },
+        async writePending(value: string) {
+          bump();
+          values.set("pending", value);
+        },
+        async removePending() {
+          bump();
+          values.delete("pending");
+        },
+      } satisfies SlotStore,
+    };
+  }
+
+  const slotRandom = {
+    async getBytes(length: number) {
+      return webcrypto.getRandomValues(new Uint8Array(length));
+    },
+  };
+
+  const deviceA = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const pinOld = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const pinNew = webcrypto.getRandomValues(new Uint8Array(32));
+
+  const firstRun = makeSlots();
+
+  const born = await openOrCreateVault({
+    slots: firstRun.store,
+    deviceKey: deviceA,
+    pinKey: pinOld,
+    random: slotRandom,
+  });
+
+  const reopened = await openOrCreateVault({
+    slots: firstRun.store,
+    deviceKey: deviceA,
+    pinKey: pinOld,
+    random: slotRandom,
+  });
+
+  check(
+    "the master key is created once and comes back the same on every unlock",
+    born.created &&
+      !reopened.created &&
+      bytesToHex(born.masterKey) === bytesToHex(reopened.masterKey),
+    "stable across unlocks",
+  );
+
+  let wrongPinRejected = false;
+
+  try {
+    await openOrCreateVault({
+      slots: firstRun.store,
+      deviceKey: deviceA,
+      pinKey: webcrypto.getRandomValues(new Uint8Array(32)),
+      random: slotRandom,
+    });
+  } catch (error) {
+    wrongPinRejected = error instanceof VaultKeyError;
+  }
+
+  check(
+    "a wrong PIN never silently mints a second master key",
+    wrongPinRejected && firstRun.values.size === 1,
+    "refused without touching the slot",
+  );
+
+  const rotationBreakages: string[] = [];
+
+  for (let failAt = 1; failAt <= 4; failAt++) {
+    const run = makeSlots();
+
+    const start = await openOrCreateVault({
+      slots: run.store,
+      deviceKey: deviceA,
+      pinKey: pinOld,
+      random: slotRandom,
+    });
+
+    try {
+      await stageRotation({
+        slots: run.store,
+        deviceKey: deviceA,
+        masterKey: start.masterKey,
+        nextPinKey: pinNew,
+        random: slotRandom,
+      });
+    } catch {
+      void 0;
+    }
+
+    const openers: string[] = [];
+
+    for (const [label, pinKey] of [
+      ["old", pinOld],
+      ["new", pinNew],
+    ] as const) {
+      try {
+        const result = await openOrCreateVault({
+          slots: run.store,
+          deviceKey: deviceA,
+          pinKey,
+          random: slotRandom,
+        });
+
+        if (
+          !result.created &&
+          bytesToHex(result.masterKey) === bytesToHex(start.masterKey)
+        ) {
+          openers.push(label);
+        }
+      } catch {
+        void 0;
+      }
+    }
+
+    if (openers.length === 0) {
+      rotationBreakages.push(`stage@${failAt}: nothing opens the vault`);
+    }
+  }
+
+  check(
+    "killing the app while a new PIN is being staged never strands the master key",
+    rotationBreakages.length === 0,
+    rotationBreakages[0] ?? "4 crash points swept",
+  );
+
+  const damaged = makeSlots();
+
+  damaged.values.set("slot", "{not a slot");
+
+  let damagedRejected: unknown = null;
+
+  try {
+    await openOrCreateVault({
+      slots: damaged.store,
+      deviceKey: deviceA,
+      pinKey: pinOld,
+      random: slotRandom,
+    });
+  } catch (error) {
+    damagedRejected = error;
+  }
+
+  check(
+    "a damaged key slot is reported, never quietly replaced with a fresh one",
+    damagedRejected instanceof VaultKeyError &&
+      damaged.values.get("slot") === "{not a slot",
+    damagedRejected instanceof Error
+      ? "refused and left untouched"
+      : "minted a new key over it",
+  );
+
+  const orphaned = makeSlots();
+
+  let orphanRejected: unknown = null;
+
+  try {
+    await openOrCreateVault({
+      slots: orphaned.store,
+      deviceKey: deviceA,
+      pinKey: pinOld,
+      random: slotRandom,
+      sealedWalletsExist: true,
+    });
+  } catch (error) {
+    orphanRejected = error;
+  }
+
+  check(
+    "a missing key slot next to sealed wallets is an error, not a fresh start",
+    orphanRejected instanceof VaultKeyError && orphaned.values.size === 0,
+    orphanRejected instanceof Error
+      ? "refused to mint a key that opens nothing"
+      : "minted a useless key",
+  );
+
+  const promotion = makeSlots();
+
+  const anchorKey = await openOrCreateVault({
+    slots: promotion.store,
+    deviceKey: deviceA,
+    pinKey: pinOld,
+    random: slotRandom,
+  });
+
+  await stageRotation({
+    slots: promotion.store,
+    deviceKey: deviceA,
+    masterKey: anchorKey.masterKey,
+    nextPinKey: pinNew,
+    random: slotRandom,
+  });
+
+  const promoted = await openOrCreateVault({
+    slots: promotion.store,
+    deviceKey: deviceA,
+    pinKey: pinNew,
+    random: slotRandom,
+  });
+
+  const afterPromotion = await openOrCreateVault({
+    slots: promotion.store,
+    deviceKey: deviceA,
+    pinKey: pinNew,
+    random: slotRandom,
+  });
+
+  check(
+    "the first unlock with the new PIN promotes it and the leftover is cleaned up",
+    promoted.promoted &&
+      !afterPromotion.promoted &&
+      bytesToHex(afterPromotion.masterKey) ===
+        bytesToHex(anchorKey.masterKey) &&
+      !promotion.values.has("pending"),
+    "promoted once, no leftovers",
+  );
+
+  const freezeStart = 1_700_000_000_000;
+
+  const freeze = createFreeze(freezeStart);
+
+  check(
+    "a panic freeze blocks signing for its whole window and then lets go by itself",
+    isFrozen(freeze, freezeStart + 1_000) &&
+      isFrozen(freeze, freezeStart + FREEZE_DURATION_MS - 1) &&
+      !isFrozen(freeze, freezeStart + FREEZE_DURATION_MS) &&
+      !isFrozen(null, freezeStart),
+    `${FREEZE_DURATION_MS / 3_600_000}h window, expires on its own`,
+  );
+
+  const walked = advanceFreeze(freeze, freezeStart + 2 * 60 * 60 * 1000);
+
+  check(
+    "winding the clock back does not shorten a freeze",
+    isFrozen(walked, freezeStart - 10 * 24 * 60 * 60 * 1000) &&
+      remainingFreezeMs(walked, freezeStart - 1_000_000) ===
+        remainingFreezeMs(walked, freezeStart + 2 * 60 * 60 * 1000),
+    "the highest clock ever seen is what counts",
+  );
+
+  check(
+    "a damaged freeze record is ignored rather than trusted",
+    parseFreeze("{oops") === null &&
+      parseFreeze(JSON.stringify({ ...freeze, until: freeze.frozenAt - 1 })) ===
+        null &&
+      parseFreeze(JSON.stringify({ ...freeze, version: 2 })) === null &&
+      parseFreeze(serializeFreeze(freeze))?.until === freeze.until,
+    "malformed freeze state cannot lock anyone out forever",
+  );
+
+  check(
+    "the frozen error tells the user how long is left, in plain words",
+    new WalletFrozenError(90 * 60 * 1000).message.includes("2 hours") &&
+      new WalletFrozenError(30 * 1000).message.includes("1 minute"),
+    new WalletFrozenError(90 * 60 * 1000).message.slice(0, 60),
+  );
+
+  unlockSession();
+
+  const frozenSigner = createLocalMnemonicSigner({
+    engine,
+    secrets,
+    assertNotFrozen: async () => {
+      throw new WalletFrozenError(3 * 60 * 60 * 1000);
+    },
+  });
+
+  const frozenAttempts: string[] = [];
+
+  for (const [label, attempt] of [
+    ["address", () => frozenSigner.getAddress()],
+    ["message", () => frozenSigner.signMessage("anything")],
+    [
+      "transaction",
+      () =>
+        frozenSigner.signTransaction({
+          type: "eip1559",
+          chainId: 1,
+          from: generated.address,
+          to: "0x000000000000000000000000000000000000dEaD",
+          value: 1n,
+          nonce: 0,
+          gas: 21000n,
+          maxFeePerGas: 1n,
+          maxPriorityFeePerGas: 1n,
+          data: "0x",
+        }),
+    ],
+  ] as const) {
+    try {
+      await attempt();
+
+      frozenAttempts.push(`${label} went through`);
+    } catch (error) {
+      if (!(error instanceof WalletFrozenError)) {
+        frozenAttempts.push(`${label} failed for the wrong reason`);
+      }
+    }
+  }
+
+  check(
+    "a frozen wallet refuses every signature, not just transfers",
+    frozenAttempts.length === 0,
+    frozenAttempts[0] ?? "address, message and transaction all refused",
+  );
+
+  check(
+    "the approval exposure formula is one formula, shared by the scan and the firewall",
+    approvalExposureUsd({
+      allowanceTokens: 5000,
+      balanceTokens: 1000,
+      priceUsd: 1,
+      unlimited: false,
+    }) === 1000 &&
+      approvalExposureUsd({
+        allowanceTokens: 100,
+        balanceTokens: 1000,
+        priceUsd: 1,
+        unlimited: false,
+      }) === 100 &&
+      approvalExposureUsd({
+        allowanceTokens: 0,
+        balanceTokens: 1000,
+        priceUsd: 2,
+        unlimited: true,
+      }) === 2000 &&
+      approvalExposureUsd({
+        allowanceTokens: 100,
+        balanceTokens: 1000,
+        priceUsd: null,
+        unlimited: false,
+      }) === null,
+    "capped by balance, unlimited reaches the balance, no price means unknown",
+  );
+
+  const onTestnet = (intent: PolicyIntent) =>
+    decidePolicy({
+      intent,
+      policy: guardedPolicy,
+      context,
+      networkKind: "testnet",
+      priceAvailability: "unavailable",
+    });
+
+  check(
+    "dollar rules step aside on a network without prices, for approvals and swaps too",
+    onTestnet({
+      kind: "approval",
+      spender: stranger,
+      spenderKnown: true,
+      unlimited: false,
+      revoking: false,
+      exposureUsd: null,
+    }).decision === "uncovered" &&
+      onTestnet({ kind: "swap", lossUsd: null }).decision === "uncovered",
+    "no price on a testnet no longer blocks every approval and swap",
+  );
+
+  check(
+    "the rules that need no price still apply on a testnet",
+    onTestnet({
+      kind: "approval",
+      spender: stranger,
+      spenderKnown: true,
+      unlimited: true,
+      revoking: false,
+      exposureUsd: null,
+    }).decision === "block" &&
+      onTestnet({
+        kind: "approval",
+        spender: stranger,
+        spenderKnown: false,
+        unlimited: false,
+        revoking: false,
+        exposureUsd: null,
+      }).decision === "block",
+    "unlimited and unknown spender are refused everywhere",
+  );
+
+  check(
+    "amounts are added exactly, never through floating point",
+    addDecimalAmounts(["0.1", "0.2"]) === "0.3" &&
+      addDecimalAmounts(["0.318700000000000123"]) ===
+        "0.318700000000000123" &&
+      addDecimalAmounts(["0.0000005"]) === "0.0000005" &&
+      addDecimalAmounts(["5000000000000000000000"]) ===
+        "5000000000000000000000" &&
+      addDecimalAmounts(["0.2", "0.1187"]) === "0.3187" &&
+      addDecimalAmounts(["1", "2.5"]) === "3.5",
+    "no rounding, no exponent notation, no invented digits",
+  );
+
+  check(
+    "junk amounts are refused instead of silently becoming zero",
+    addDecimalAmounts(["abc"]) === null &&
+      addDecimalAmounts(["1e-19"]) === null &&
+      addDecimalAmounts([]) === null &&
+      isPositiveAmount("0") === false &&
+      isPositiveAmount("0.000") === false &&
+      isPositiveAmount("-1") === false &&
+      isPositiveAmount("0.0000000001") === true,
+    "unparsable input never turns into a number on screen",
+  );
+
+  const swapHash = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+
+  const trackedSwap = {
+    version: 1 as const,
+    hash: swapHash as `0x${string}`,
+    chainId: 1,
+    walletId: created.account.id,
+    from: generated.address,
+    to: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45" as const,
+    assetType: "swap" as const,
+    symbol: "USDC",
+    valueWei: "1000000",
+    tokenDecimals: 6,
+    symbolOut: "ETH",
+    valueOutWei: "320000000000000000",
+    tokenOutDecimals: 18,
+    createdAt: Date.now(),
+    status: "confirmed" as const,
+    blockNumber: null,
+    gasUsed: null,
+    effectiveGasPriceWei: null,
+    confirmedAt: null,
+  };
+
+  const chainCredit = {
+    id: "chain:1",
+    hash: swapHash as `0x${string}`,
+    status: "confirmed" as const,
+    direction: "received" as const,
+    origin: "native-transfer" as const,
+    assetType: "native" as const,
+    symbol: "ETH",
+    amount: "0.3187",
+    from: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45" as const,
+    to: generated.address,
+    contractAddress: null,
+    blockNumber: null,
+    timestamp: Date.now(),
+  };
+
+  const enriched = mergeActivity([chainCredit], [trackedSwap], generated.address);
+
+  const withoutChain = mergeActivity([], [trackedSwap], generated.address);
+
+  check(
+    "a finished swap shows what actually arrived, not what was quoted",
+    enriched.length === 1 &&
+      enriched[0].amountOut === "0.3187" &&
+      enriched[0].amountOutIsQuote === false,
+    `shown: ${enriched[0]?.amountOut} (quote was 0.32)`,
+  );
+
+  check(
+    "until the chain confirms the amount, the quote is marked as a quote",
+    withoutChain[0].amountOut === "0.32" &&
+      withoutChain[0].amountOutIsQuote === true,
+    "quoted output is never presented as received",
+  );
+
+  const splitCredits = mergeActivity(
+    [
+      { ...chainCredit, id: "chain:a", amount: "0.2" },
+      { ...chainCredit, id: "chain:b", amount: "0.1187" },
+      {
+        ...chainCredit,
+        id: "chain:c",
+        amount: "5",
+        to: "0x0000000000000000000000000000000000000001" as const,
+      },
+    ],
+    [trackedSwap],
+    generated.address,
+  );
+
+  check(
+    "a swap paid out in several transfers is added up, and other people's credits are not",
+    splitCredits[0].amountOut === "0.3187" &&
+      splitCredits[0].amountOutIsQuote === false,
+    `summed: ${splitCredits[0]?.amountOut}`,
+  );
+
+  const realUsdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
+
+  const fakeUsdc = "0x00000000000000000000000000000000deadbeef" as const;
+
+  const tokenSwap = {
+    ...trackedSwap,
+    symbolOut: "USDC",
+    contractAddressOut: realUsdc,
+    tokenOutDecimals: 6,
+    valueOutWei: "1000000",
+  };
+
+  const impostor = mergeActivity(
+    [
+      {
+        ...chainCredit,
+        id: "chain:real",
+        assetType: "erc20" as const,
+        symbol: "USDC",
+        contractAddress: realUsdc,
+        amount: "0.5",
+      },
+      {
+        ...chainCredit,
+        id: "chain:fake",
+        assetType: "erc20" as const,
+        symbol: "USDC",
+        contractAddress: fakeUsdc,
+        amount: "999",
+      },
+    ],
+    [tokenSwap],
+    generated.address,
+  );
+
+  check(
+    "a token that merely shares a ticker cannot inflate what the swap paid out",
+    impostor[0].amountOut === "0.5",
+    `credited: ${impostor[0]?.amountOut} (impostor offered 999)`,
+  );
+
+  const incoming = resolveDetailsAsset({
+    tracked: null,
+    hint: { symbol: "USDC", amount: "500", assetType: "erc20" },
+    chainValueWei: 0n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "an incoming token transfer is not shown as zero ether",
+    incoming.symbol === "USDC" &&
+      incoming.displayAmount === "500" &&
+      incoming.kind === "transfer",
+    `${incoming.displayAmount} ${incoming.symbol}`,
+  );
+
+  const bare = resolveDetailsAsset({
+    tracked: null,
+    hint: null,
+    chainValueWei: 10n ** 18n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "with nothing known, the chain value is shown in the native asset",
+    bare.symbol === "ETH" && bare.displayAmount === "1",
+    `${bare.displayAmount} ${bare.symbol}`,
+  );
+
+  const junkHint = resolveDetailsAsset({
+    tracked: null,
+    hint: { symbol: "USDC", amount: "5e-7", assetType: "erc20" },
+    chainValueWei: 0n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "an unparsable amount falls back to the chain instead of inventing one",
+    junkHint.displayAmount === "0" && junkHint.symbol === "ETH",
+    "junk hint is refused, not displayed",
+  );
+
+  const approval = resolveDetailsAsset({
+    tracked: {
+      assetType: "approve",
+      symbol: "USDC",
+      valueWei: "1000000",
+      tokenDecimals: 6,
+    },
+    hint: null,
+    chainValueWei: 0n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "an approval is marked as an allowance, not as money that moved",
+    approval.kind === "approve" && approval.displayAmount === "1",
+    `kind=${approval.kind}`,
+  );
+
+  const swapDetails = resolveDetailsAsset({
+    tracked: {
+      assetType: "swap",
+      symbol: "USDC",
+      valueWei: "1000000",
+      tokenDecimals: 6,
+      symbolOut: "ETH",
+    },
+    hint: { amountOut: "0.3187" },
+    chainValueWei: 0n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "a swap detail carries both sides, not just what was paid in",
+    swapDetails.kind === "swap" &&
+      swapDetails.symbolOut === "ETH" &&
+      swapDetails.amountOut === "0.3187" &&
+      swapDetails.amountOutIsQuote === false &&
+      swapDetails.displayAmount === "1",
+    `${swapDetails.displayAmount} ${swapDetails.symbol} → ${swapDetails.amountOut} ${swapDetails.symbolOut}`,
+  );
+
+  const quotedDetails = resolveDetailsAsset({
+    tracked: {
+      assetType: "swap",
+      symbol: "USDC",
+      valueWei: "1000000",
+      tokenDecimals: 6,
+      symbolOut: "ETH",
+    },
+    hint: { amountOut: "0.32", amountOutIsQuote: true },
+    chainValueWei: 0n,
+    nativeSymbol: "ETH",
+  });
+
+  check(
+    "the details screen learns that an unconfirmed output is only a quote",
+    quotedDetails.amountOut === "0.32" &&
+      quotedDetails.amountOutIsQuote === true,
+    "the quote flag survives the trip from the list to the details",
+  );
+
+  check(
+    "the shown amount never depends on guessing decimals from the raw value",
+    resolveDetailsAsset({
+      tracked: null,
+      hint: { symbol: "USDC", amount: "500", assetType: "erc20" },
+      chainValueWei: 0n,
+      nativeSymbol: "ETH",
+    }).displayAmount === "500" &&
+      resolveDetailsAsset({
+        tracked: null,
+        hint: null,
+        chainValueWei: 10n ** 18n,
+        nativeSymbol: "ETH",
+      }).displayAmount === "1",
+    "display amount is carried, not recomputed from a rescaled field",
+  );
+
+  const revealed = revealSecret(generated.mnemonic, generated.address);
+
+  check(
+    "the wallet can show its own phrase and a private key that matches its address",
+    revealed.recoveryPhrase === generated.mnemonic &&
+      /^0x[0-9a-f]{64}$/.test(revealed.privateKey) &&
+      privateKeyToAccount(revealed.privateKey).address === generated.address,
+    `${revealed.privateKey.slice(0, 10)}… controls ${generated.address}`,
+  );
+
+  let mismatched: unknown = null;
+
+  try {
+    revealSecret(
+      generated.mnemonic,
+      "0x0000000000000000000000000000000000000001",
+    );
+  } catch (error) {
+    mismatched = error;
+  }
+
+  check(
+    "a phrase that belongs to another wallet is never shown",
+    mismatched instanceof Error,
+    mismatched instanceof Error ? mismatched.message.slice(0, 48) : "shown",
+  );
+
+  const swapDeployment = getUniswapDeployment("eth-mainnet")!;
+
+  const swapNow = 1_700_000_000_000;
+
+  const swapNowSeconds = BigInt(Math.floor(swapNow / 1000));
+
+  function swapWithDeadline(deadline: bigint) {
+    return {
+      kind: "swap" as const,
+      chainId: 1,
+      from: generated.address,
+      assetIn: { address: usdc, symbol: "USDC", decimals: 6 },
+      assetOut: { address: null, symbol: "ETH", decimals: 18 },
+      amountIn: 1_000_000n,
+      quotedAmountOut: 1_000_000_000_000_000n,
+      minAmountOut: (1_000_000_000_000_000n * 9950n) / 10_000n,
+      slippageBps: 50,
+      route: { kind: "single" as const, fee: 500 as const },
+      deadline,
+    };
+  }
+
+  function deadlineVerdict(deadline: bigint) {
+    try {
+      validateSwapIntent(swapWithDeadline(deadline), {
+        now: swapNow,
+        expectedChainId: 1,
+        expectedFrom: generated.address,
+        deployment: swapDeployment,
+      });
+
+      return "accepted";
+    } catch (error) {
+      return error instanceof TransactionValidationError
+        ? error.message
+        : "wrong error";
+    }
+  }
+
+  check(
+    "a swap that already expired is refused instead of being signed",
+    deadlineVerdict(swapNowSeconds - 1n).includes("already expired"),
+    deadlineVerdict(swapNowSeconds - 1n),
+  );
+
+  check(
+    "a swap that would stay valid for days is refused",
+    deadlineVerdict(swapNowSeconds + 86_400n).includes("far too long"),
+    deadlineVerdict(swapNowSeconds + 86_400n),
+  );
+
+  check(
+    "a swap with a sane deadline still goes through",
+    deadlineVerdict(swapNowSeconds + 900n) === "accepted",
+    deadlineVerdict(swapNowSeconds + 900n),
+  );
+
+  const swapContext = buildPolicyContext({
+    owner: generated.address,
+    activity: [],
+    tracked: [
+      {
+        version: 1,
+        hash: "0x02",
+        chainId: 1,
+        walletId: created.account.id,
+        from: generated.address,
+        to: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+        assetType: "swap",
+        symbol: "ETH",
+        valueWei: (10n ** 19n).toString(),
+        valueUsd: 30000,
+        createdAt: Date.now() - 60_000,
+        status: "confirmed",
+        blockNumber: null,
+        gasUsed: null,
+        effectiveGasPriceWei: null,
+        confirmedAt: null,
+      },
+      {
+        version: 1,
+        hash: "0x03",
+        chainId: 1,
+        walletId: created.account.id,
+        from: generated.address,
+        to: "0x000000000000000000000000000000000000dEaD",
+        assetType: "erc20",
+        symbol: "GONE",
+        valueWei: (4000n * 10n ** 6n).toString(),
+        tokenDecimals: 6,
+        valueUsd: 4000,
+        createdAt: Date.now() - 60_000,
+        status: "confirmed",
+        blockNumber: null,
+        gasUsed: null,
+        effectiveGasPriceWei: null,
+        confirmedAt: null,
+      },
+    ] as never,
+    priceOf: () => null,
+  });
+
+  check(
+    "a swap is not counted as outflow, but the spent token counts at its stored price",
+    swapContext.spentTodayUsd === 4000,
+    `outflow $${swapContext.spentTodayUsd}`,
+  );
+
+  const dustContext = buildPolicyContext({
+    owner: generated.address,
+    activity: [],
+    tracked: [
+      {
+        version: 1,
+        hash: "0x04",
+        chainId: 1,
+        walletId: created.account.id,
+        from: generated.address,
+        to: "0x00000000000000000000000000000000000000Ff",
+        assetType: "native",
+        symbol: "ETH",
+        valueWei: "1",
+        createdAt: Date.now(),
+        status: "pending",
+        blockNumber: null,
+        gasUsed: null,
+        effectiveGasPriceWei: null,
+        confirmedAt: null,
+      },
+    ] as never,
+    priceOf: () => 2000,
+  });
+
+  check(
+    "unconfirmed dust does not make an address known",
+    dustContext.knownRecipients.length === 0,
+  );
+
+  const selfHash =
+    "0xc5ffd73b8a7a41fdc2180901afcaaf038defa7757aadb36f052a2bdb57abe002" as const;
+
+  const selfTransfer = {
+    id: "chain:self",
+    hash: selfHash,
+    status: "confirmed" as const,
+    direction: resolveDirection(
+      generated.address,
+      generated.address,
+      generated.address,
+    ),
+    origin: "native-transfer" as const,
+    assetType: "native" as const,
+    symbol: "ETH",
+    amount: "0.01",
+    from: generated.address,
+    to: generated.address,
+    contractAddress: null,
+    blockNumber: null,
+    timestamp: Date.now(),
+  };
+
+  check(
+    "a transfer to your own address is not counted as money leaving",
+    selfTransfer.direction === "self" && isOutflow(selfTransfer.direction) === false,
+    `direction: ${selfTransfer.direction}`,
+  );
+
+  const selfPresentation = presentActivity(selfTransfer);
+
+  check(
+    "a self transfer is never shown with a minus in front of it",
+    selfPresentation.amountSign === "" &&
+      selfPresentation.title === "Moved ETH to yourself" &&
+      selfPresentation.note !== null,
+    `"${selfPresentation.title}", sign "${selfPresentation.amountSign}"`,
+  );
+
+  const outgoing = presentActivity({ ...selfTransfer, direction: "sent", to: stranger });
+
+  check(
+    "a real outgoing transfer still shows the minus and the recipient",
+    outgoing.amountSign === "-" &&
+      outgoing.counterparty === stranger &&
+      outgoing.counterpartyLabel === "To",
+    `sign "${outgoing.amountSign}" to ${outgoing.counterparty?.slice(0, 8)}…`,
+  );
+
+  const selfContext = buildPolicyContext({
+    owner: generated.address,
+    activity: [selfTransfer],
+    tracked: [
+      {
+        version: 1,
+        hash: selfHash,
+        chainId: 1,
+        walletId: created.account.id,
+        from: generated.address,
+        to: generated.address,
+        assetType: "native",
+        symbol: "ETH",
+        valueWei: "10000000000000000",
+        createdAt: Date.now(),
+        status: "confirmed",
+        blockNumber: null,
+        gasUsed: null,
+        effectiveGasPriceWei: null,
+        confirmedAt: null,
+      },
+    ] as never,
+    priceOf: () => 2000,
+  });
+
+  check(
+    "moving coins to yourself does not eat into the daily outflow limit",
+    selfContext.spentTodayUsd === 0,
+    `counted $${selfContext.spentTodayUsd}`,
+  );
+
+  check(
+    "your own address never becomes a known recipient",
+    selfContext.knownRecipients.length === 0,
+    `known: ${selfContext.knownRecipients.length}`,
+  );
+
+  const pricedAsset = {
+    type: "native" as const,
+    symbol: "ETH",
+    name: "Ethereum",
+    balance: "2",
+    decimals: 18,
+    priceUsd: 2000,
+    valueUsd: 4000,
+    logo: null,
+  };
+
+  const unpricedAsset = {
+    type: "erc20" as const,
+    symbol: "USDC",
+    name: "USDC",
+    balance: "17",
+    decimals: 6,
+    priceUsd: null,
+    valueUsd: null,
+    logo: null,
+  };
+
+  const nothingHeld = { ...unpricedAsset, symbol: "DUST", balance: "0" };
+
+  const noPrices = valuePortfolio([
+    { ...pricedAsset, priceUsd: null, valueUsd: null },
+    unpricedAsset,
+  ]);
+
+  check(
+    "a wallet whose assets have no price is not worth zero dollars",
+    noPrices.coverage === "unavailable" && noPrices.totalUsd === null,
+    `total: ${String(noPrices.totalUsd)}`,
+  );
+
+  const partial = valuePortfolio([pricedAsset, unpricedAsset]);
+
+  check(
+    "a total that silently drops an asset without a price is marked as partial",
+    partial.coverage === "partial" &&
+      partial.totalUsd === 4000 &&
+      partial.unvaluedSymbols.join(",") === "USDC" &&
+      describeValuation(partial) !== null,
+    describeValuation(partial) ?? "no note",
+  );
+
+  const complete = valuePortfolio([pricedAsset, nothingHeld]);
+
+  check(
+    "an empty balance does not make an otherwise complete total look partial",
+    complete.coverage === "complete" &&
+      complete.totalUsd === 4000 &&
+      describeValuation(complete) === null,
+    `coverage: ${complete.coverage}`,
+  );
+
+  const briefingPolicy = {
+    ...DEFAULT_SECURITY_POLICY,
+    maxSingleTransferUsd: 5000,
+    newRecipientMaxUsd: 500,
+    dailyOutflowLimitUsd: 10000,
+  };
+
+  const knownRecipientReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "ETH",
+    amount: "1",
+    amountUsd: 2000,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: { knownRecipients: [stranger.toLowerCase()], spentTodayUsd: 100 },
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "an allowed transfer says out loud what was checked",
+    knownRecipientReview.decision.decision === "allow" &&
+      knownRecipientReview.checks.length >= 3 &&
+      knownRecipientReview.checks.every((item) => item.status !== "blocked") &&
+      knownRecipientReview.checks.some(
+        (item) =>
+          item.id === "recipient-history" &&
+          item.status === "pass" &&
+          item.title === "You have sent to this address before",
+      ) &&
+      knownRecipientReview.checks.some(
+        (item) =>
+          item.id === "single-transfer-limit" &&
+          item.title === "Within your $5,000 limit",
+      ),
+    knownRecipientReview.checks.map((item) => item.title).join(" / "),
+  );
+
+  const firstTimeReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "ETH",
+    amount: "0.1",
+    amountUsd: 200,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: { knownRecipients: [], spentTodayUsd: 0 },
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "a first transfer to an unknown address is flagged without blocking it",
+    firstTimeReview.decision.decision === "allow" &&
+      firstTimeReview.checks.some(
+        (item) =>
+          item.id === "recipient-history" && item.status === "attention",
+      ),
+    firstTimeReview.checks.find((item) => item.id === "recipient-history")
+      ?.title ?? "missing",
+  );
+
+  const blockedReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "ETH",
+    amount: "10",
+    amountUsd: 20000,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: { knownRecipients: [], spentTodayUsd: 0 },
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  const blockedChecks = blockedReview.checks.filter(
+    (item) => item.status === "blocked",
+  );
+
+  check(
+    "a blocked transfer can never show an all-clear briefing",
+    blockedReview.decision.decision === "block" &&
+      blockedChecks.length > 0 &&
+      blockedChecks.some(
+        (item) =>
+          item.detail ===
+          (blockedReview.decision.decision === "block"
+            ? blockedReview.decision.message
+            : null),
+      ),
+    blockedChecks.map((item) => item.title).join(" / "),
+  );
+
+  const testnetReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "ETH",
+    amount: "10",
+    amountUsd: null,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: { knownRecipients: [], spentTodayUsd: 0 },
+    networkKind: "testnet",
+    priceAvailability: "unavailable",
+  });
+
+  check(
+    "on a test network the briefing admits the limits are not being applied",
+    testnetReview.decision.decision === "uncovered" &&
+      testnetReview.checks.some(
+        (item) =>
+          item.id === "single-transfer-limit" && item.status === "unchecked",
+      ) &&
+      testnetReview.checks.every((item) => item.status !== "blocked"),
+    testnetReview.checks.map((item) => `${item.status}`).join(","),
+  );
+
+  const unlimitedApproval = reviewApproval({
+    spender: stranger,
+    spenderName: null,
+    spenderKnown: false,
+    token: "USDC",
+    allowanceLabel: "no limit",
+    unlimited: true,
+    revoking: false,
+    exposureUsd: null,
+    policy: DEFAULT_SECURITY_POLICY,
+    networkKind: "mainnet",
+  });
+
+  check(
+    "an unlimited approval is refused and the briefing says so",
+    unlimitedApproval.decision.decision === "block" &&
+      unlimitedApproval.checks.some(
+        (item) => item.id === "approval-bounded" && item.status === "blocked",
+      ),
+    unlimitedApproval.checks.map((item) => item.title).join(" / "),
+  );
+
+  const boundedApproval = reviewApproval({
+    spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    spenderName: "Permit2",
+    spenderKnown: true,
+    token: "USDC",
+    allowanceLabel: "1000 USDC",
+    unlimited: false,
+    revoking: false,
+    exposureUsd: 1000,
+    policy: { ...DEFAULT_SECURITY_POLICY, maxApprovalExposureUsd: 5000 },
+    networkKind: "mainnet",
+  });
+
+  check(
+    "a bounded approval to a known contract states the cap and the exposure",
+    boundedApproval.decision.decision === "allow" &&
+      boundedApproval.checks.some(
+        (item) => item.id === "approval-bounded" && item.status === "pass",
+      ) &&
+      boundedApproval.checks.some(
+        (item) =>
+          item.id === "approval-exposure" &&
+          item.title === "At most $1,000 is exposed",
+      ),
+    boundedApproval.checks.map((item) => item.title).join(" / "),
+  );
+
+  const swapReview = reviewSwap({
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    amountIn: "1000",
+    minAmountOut: "0.31",
+    slippagePercent: "0.50%",
+    deadlineMinutes: 15,
+    routerKnown: true,
+    routeLabel: "Uniswap V3, direct pool",
+    lossUsd: 40,
+    policy: { ...DEFAULT_SECURITY_POLICY, maxSwapLossUsd: 100 },
+    networkKind: "mainnet",
+  });
+
+  check(
+    "a swap briefing names the floor, the expiry and the worst case",
+    swapReview.decision.decision === "allow" &&
+      swapReview.checks.some(
+        (item) =>
+          item.id === "swap-minimum" &&
+          item.title === "You receive at least 0.31 ETH",
+      ) &&
+      swapReview.checks.some(
+        (item) => item.id === "swap-deadline" && item.status === "pass",
+      ) &&
+      swapReview.checks.some(
+        (item) =>
+          item.id === "swap-worst-case" &&
+          item.title === "Worst case costs you $40",
+      ),
+    swapReview.checks.map((item) => item.title).join(" / "),
+  );
+
+  const lossySwap = reviewSwap({
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    amountIn: "1000",
+    minAmountOut: "0.2",
+    slippagePercent: "0.50%",
+    deadlineMinutes: 15,
+    routerKnown: true,
+    routeLabel: "Uniswap V3, direct pool",
+    lossUsd: 400,
+    policy: { ...DEFAULT_SECURITY_POLICY, maxSwapLossUsd: 100 },
+    networkKind: "mainnet",
+  });
+
+  check(
+    "a swap over the loss limit is blocked and the briefing shows it",
+    lossySwap.decision.decision === "block" &&
+      lossySwap.checks.some(
+        (item) => item.id === "swap-worst-case" && item.status === "blocked",
+      ),
+    lossySwap.checks.find((item) => item.status === "blocked")?.title ??
+      "missing",
+  );
+
+  const poisonedAddress = "0x000000000000000000000000000000000000BAad" as const;
+
+  const poisonContext = buildPolicyContext({
+    owner: generated.address,
+    activity: [
+      {
+        id: "chain:poison",
+        hash: "0xdead000000000000000000000000000000000000000000000000000000000001",
+        status: "confirmed",
+        direction: "sent",
+        origin: "token-log",
+        assetType: "erc20",
+        symbol: "USDC",
+        amount: "1",
+        from: generated.address,
+        to: poisonedAddress,
+        contractAddress: "0x00000000000000000000000000000000deadbeef",
+        blockNumber: null,
+        timestamp: Date.now(),
+      },
+      {
+        id: "chain:real",
+        hash: "0xdead000000000000000000000000000000000000000000000000000000000002",
+        status: "confirmed",
+        direction: "sent",
+        origin: "native-transfer",
+        assetType: "native",
+        symbol: "ETH",
+        amount: "1",
+        from: generated.address,
+        to: stranger,
+        contractAddress: null,
+        blockNumber: null,
+        timestamp: Date.now(),
+      },
+    ],
+    tracked: [],
+    priceOf: () => 2000,
+  });
+
+  check(
+    "a token transfer log nobody signed cannot make an address look familiar",
+    poisonContext.knownRecipients.includes(poisonedAddress.toLowerCase()) ===
+      false && poisonContext.knownRecipients.includes(stranger.toLowerCase()),
+    `known: ${poisonContext.knownRecipients.join(", ")}`,
+  );
+
+  const poisonedReview = reviewTransfer({
+    recipient: poisonedAddress,
+    symbol: "ETH",
+    amount: "1",
+    amountUsd: 2000,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: poisonContext,
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "an address planted by a fake transfer is still shown as a first-time recipient",
+    poisonedReview.checks.some(
+      (item) => item.id === "recipient-history" && item.status === "attention",
+    ),
+    poisonedReview.checks.find((item) => item.id === "recipient-history")
+      ?.title ?? "missing",
+  );
+
+  const contradictionReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "ETH",
+    amount: "10",
+    amountUsd: 20000,
+    recipientIsContract: false,
+    policy: briefingPolicy,
+    context: { knownRecipients: [], spentTodayUsd: 0 },
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "a blocked briefing never puts a tick next to a limit the amount actually breaks",
+    contradictionReview.checks.every(
+      (item) => item.status !== "pass" || !item.title.startsWith("Within"),
+    ) &&
+      contradictionReview.checks.some(
+        (item) =>
+          item.id === "daily-outflow" &&
+          item.status === "attention" &&
+          item.title.startsWith("Over"),
+      ),
+    contradictionReview.checks
+      .map((item) => `${item.status}:${item.title}`)
+      .join(" / "),
+  );
+
+  const contractReview = reviewTransfer({
+    recipient: stranger,
+    symbol: "USDC",
+    amount: "100",
+    amountUsd: 100,
+    recipientIsContract: true,
+    policy: briefingPolicy,
+    context: { knownRecipients: [], spentTodayUsd: 0 },
+    networkKind: "mainnet",
+    priceAvailability: "available",
+  });
+
+  check(
+    "sending to a contract is called out instead of a blanket all-clear",
+    contractReview.checks.some(
+      (item) =>
+        item.id === "recipient-is-contract" && item.status === "attention",
+    ) &&
+      contractReview.checks.every(
+        (item) => item.title !== "No contract gains access to your tokens",
+      ),
+    contractReview.checks.find((item) => item.id === "recipient-is-contract")
+      ?.title ?? "missing",
+  );
+
+  const reportOwner = generated.address;
+
+  const usdcToken = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
+
+  const paddedOwner = `0x${"0".repeat(24)}${reportOwner.slice(2).toLowerCase()}`;
+
+  const credited = creditedFromLogs({
+    logs: [
+      {
+        address: usdcToken,
+        topics: [
+          ERC20_TRANSFER_TOPIC,
+          `0x${"0".repeat(24)}68b3465833fb72a70ecdf485e0e4c7bd8665fc45`,
+          paddedOwner,
+        ],
+        data: "0x0000000000000000000000000000000000000000000000000000000012a05f20",
+      },
+      {
+        address: "0x00000000000000000000000000000000deadbeef",
+        topics: [
+          ERC20_TRANSFER_TOPIC,
+          `0x${"0".repeat(24)}68b3465833fb72a70ecdf485e0e4c7bd8665fc45`,
+          paddedOwner,
+        ],
+        data: "0x00000000000000000000000000000000000000000000003635c9adc5dea00000",
+      },
+    ],
+    owner: reportOwner,
+    token: usdcToken,
+  });
+
+  check(
+    "what arrived is read from the receipt, and only from the right token",
+    credited === 312500000n,
+    `credited ${String(credited)} (an impostor token log was in the same receipt)`,
+  );
+
+  const notCredited = creditedFromLogs({
+    logs: [
+      {
+        address: usdcToken,
+        topics: [
+          ERC20_TRANSFER_TOPIC,
+          paddedOwner,
+          `0x${"0".repeat(24)}68b3465833fb72a70ecdf485e0e4c7bd8665fc45`,
+        ],
+        data: "0x0000000000000000000000000000000000000000000000000000000012a05f20",
+      },
+    ],
+    owner: reportOwner,
+    token: usdcToken,
+  });
+
+  check(
+    "a token leaving the wallet is never counted as what it received",
+    notCredited === null,
+    `credited ${String(notCredited)}`,
+  );
+
+  const executed = analyzeExecution({
+    amountIn: "1000",
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    quotedAmountOut: "0.31582",
+    minAmountOut: "0.31424",
+    actualAmountOut: "0.31491",
+    gasUsed: "150000",
+    effectiveGasPriceWei: "20000000000",
+    nativeSymbol: "ETH",
+    quotedAt: 1_000_000,
+    confirmedAt: 1_012_000,
+  });
+
+  check(
+    "an execution report states the gap between quote and reality exactly",
+    executed.deviation?.amount === "-0.00091" &&
+      executed.deviation.worseThanQuote === true &&
+      executed.gasNative === "0.003" &&
+      executed.secondsToConfirm === 12 &&
+      executed.unresolved.length === 0,
+    `${executed.deviation?.amount} ${executed.symbolOut}, fee ${executed.gasNative} ETH, ${executed.secondsToConfirm}s`,
+  );
+
+  const better = analyzeExecution({
+    amountIn: "1000",
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    quotedAmountOut: "0.31",
+    minAmountOut: "0.30",
+    actualAmountOut: "0.315",
+    gasUsed: null,
+    effectiveGasPriceWei: null,
+    nativeSymbol: "ETH",
+    quotedAt: null,
+    confirmedAt: null,
+  });
+
+  check(
+    "getting more than quoted is not reported as a loss",
+    better.deviation?.amount === "0.005" &&
+      better.deviation.worseThanQuote === false,
+    `${better.deviation?.amount} ${better.symbolOut}`,
+  );
+
+  const unknown = analyzeExecution({
+    amountIn: "1000",
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    quotedAmountOut: "0.31",
+    minAmountOut: "0.30",
+    actualAmountOut: null,
+    gasUsed: null,
+    effectiveGasPriceWei: null,
+    nativeSymbol: "ETH",
+    quotedAt: null,
+    confirmedAt: null,
+  });
+
+  check(
+    "when the chain has not said what arrived, no number is invented",
+    unknown.received === null &&
+      unknown.deviation === null &&
+      unknown.unresolved.includes("what actually arrived"),
+    `unresolved: ${unknown.unresolved.join(", ")}`,
+  );
+
+  function slowStore(initial: string | null = null) {
+    let value = initial;
+
+    let reads = 0;
+
+    return {
+      reads: () => reads,
+
+      value: () => value,
+
+      store: {
+        async read() {
+          reads += 1;
+
+          await new Promise((resolve) => setTimeout(resolve, 5));
+
+          return value;
+        },
+
+        async write(next: string) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+
+          value = next;
+        },
+      },
+    };
+  }
+
+  let clock = 1_000_000;
+
+  const twoAtOnce = slowStore();
+
+  const guardA = createOutflowGuard({
+    store: twoAtOnce.store,
+    now: () => clock,
+  });
+
+  const bothSixHundred = await Promise.all([
+    guardA.checkAndReserve({
+      id: "a",
+      amountUsd: 600,
+      limitUsd: 1000,
+      spentTodayUsd: 0,
+    }),
+
+    guardA.checkAndReserve({
+      id: "b",
+      amountUsd: 600,
+      limitUsd: 1000,
+      spentTodayUsd: 0,
+    }),
+  ]);
+
+  check(
+    "two simultaneous $600 transfers against a $1000 daily limit: exactly one passes",
+    bothSixHundred.filter((result) => result.ok).length === 1,
+    `passed: ${bothSixHundred.filter((result) => result.ok).length}`,
+  );
+
+  const fiveAtOnce = slowStore();
+
+  const guardB = createOutflowGuard({
+    store: fiveAtOnce.store,
+    now: () => clock,
+  });
+
+  const fiveQuarters = await Promise.all(
+    [1, 2, 3, 4, 5].map((index) =>
+      guardB.checkAndReserve({
+        id: `q${index}`,
+        amountUsd: 250,
+        limitUsd: 1000,
+        spentTodayUsd: 0,
+      }),
+    ),
+  );
+
+  check(
+    "five simultaneous $250 transfers against a $1000 limit: no more than four pass",
+    fiveQuarters.filter((result) => result.ok).length === 4,
+    `passed: ${fiveQuarters.filter((result) => result.ok).length}`,
+  );
+
+  const withPending = slowStore();
+
+  const guardC = createOutflowGuard({
+    store: withPending.store,
+    now: () => clock,
+  });
+
+  const afterPending = await guardC.checkAndReserve({
+    id: "new",
+    amountUsd: 400,
+    limitUsd: 1000,
+    spentTodayUsd: 700,
+  });
+
+  check(
+    "a $400 transfer is refused while $700 is already spent or waiting",
+    afterPending.ok === false,
+    afterPending.ok === false
+      ? `would reach $${afterPending.wouldTotalUsd}`
+      : "passed",
+  );
+
+  const releasing = slowStore();
+
+  const guardD = createOutflowGuard({
+    store: releasing.store,
+    now: () => clock,
+  });
+
+  await guardD.checkAndReserve({
+    id: "doomed",
+    amountUsd: 700,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  const blockedWhileHeld = await guardD.checkAndReserve({
+    id: "next",
+    amountUsd: 400,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  await guardD.release("doomed");
+
+  const allowedAfterRelease = await guardD.checkAndReserve({
+    id: "next",
+    amountUsd: 400,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  check(
+    "a signature that never went out frees its hold, and the next transfer goes through",
+    blockedWhileHeld.ok === false && allowedAfterRelease.ok === true,
+    `held: ${blockedWhileHeld.ok ? "passed" : "blocked"}, after release: ${allowedAfterRelease.ok ? "passed" : "blocked"}`,
+  );
+
+  const crashed = slowStore();
+
+  const guardE = createOutflowGuard({
+    store: crashed.store,
+    now: () => clock,
+    ttlMs: 60_000,
+  });
+
+  await guardE.checkAndReserve({
+    id: "orphan",
+    amountUsd: 900,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  const restarted = createOutflowGuard({
+    store: crashed.store,
+    now: () => clock,
+    ttlMs: 60_000,
+  });
+
+  const stillHeld = await restarted.checkAndReserve({
+    id: "after-restart",
+    amountUsd: 200,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  clock += 61_000;
+
+  const reconciled = await restarted.reconcile();
+
+  const afterReconcile = await restarted.checkAndReserve({
+    id: "after-reconcile",
+    amountUsd: 200,
+    limitUsd: 1000,
+    spentTodayUsd: 0,
+  });
+
+  check(
+    "a hold that survived a crash still counts, and is only released once it goes stale",
+    stillHeld.ok === false &&
+      reconciled.length === 0 &&
+      afterReconcile.ok === true,
+    `held after restart: ${stillHeld.ok ? "no" : "yes"}, left after reconcile: ${reconciled.length}`,
+  );
+
+  const noLimit = slowStore();
+
+  const guardF = createOutflowGuard({
+    store: noLimit.store,
+    now: () => clock,
+  });
+
+  const unlimited = await guardF.checkAndReserve({
+    id: "free",
+    amountUsd: 999_999,
+    limitUsd: null,
+    spentTodayUsd: 0,
+  });
+
+  check(
+    "with no daily limit set nothing is reserved and nothing is refused",
+    unlimited.ok === true &&
+      unlimited.reserved === false &&
+      noLimit.value() === null,
+    `stored: ${String(noLimit.value())}`,
+  );
+
+  console.log(
+    failed === 0
+      ? "\nCore runs in Node without React Native"
+      : `\nFAILED checks: ${failed}`,
+  );
+
+  if (failed > 0) {
+    process.exit(1);
+  }
+}

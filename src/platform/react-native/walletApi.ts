@@ -1,46 +1,65 @@
-import { confirmMnemonic } from "../../core/wallet/confirmMnemonic";
-import { generateWallet } from "../../core/wallet/generateWallet";
-import { importWallet } from "../../core/wallet/importWallet";
-import {
-  addWallet,
-  getActiveWallet,
-  listWallets,
-  removeWallet,
-  setActiveWallet,
-} from "../../core/wallet/walletStore";
+import { confirmMnemonic } from "@/core/wallet/confirmMnemonic";
 
-import { expoRandomSource } from "./expoRandomSource";
-import { expoSecretStorage } from "./expoSecretStorage";
+import { assertSessionUnlocked } from "@/core/security/sessionLock";
+import {
+  revealSecret,
+  type RevealedSecret,
+} from "@/core/wallet/revealSecret";
+
+import { walletEngine } from "./compositionRoot";
+import { expoSecretStore } from "./secretStore";
 
 export const walletApi = {
-  generate() {
-    return generateWallet({
-      random: expoRandomSource,
-    });
+  prepare() {
+    return walletEngine.prepare();
   },
 
-  import(mnemonic: string) {
-    return importWallet(mnemonic);
+  create(recoveryPhrase: string) {
+    return walletEngine.create(recoveryPhrase);
   },
 
-  persist(mnemonic: string) {
-    return addWallet(mnemonic, expoSecretStorage);
+  importFromMnemonic(mnemonic: string) {
+    return walletEngine.importFromMnemonic(mnemonic);
   },
 
   load() {
-    return getActiveWallet(expoSecretStorage);
+    return walletEngine.getActive();
+  },
+
+  health() {
+    return walletEngine.getHealth();
+  },
+
+  async reveal(): Promise<RevealedSecret> {
+    assertSessionUnlocked();
+
+    const wallet = await walletEngine.getActive();
+
+    if (!wallet) {
+      throw new Error("Active wallet not found");
+    }
+
+    const secret = await expoSecretStore.load(wallet.id);
+
+    if (!secret) {
+      throw new Error(
+        "This wallet has no recovery phrase stored on this device",
+      );
+    }
+
+    return revealSecret(secret.mnemonic, wallet.address);
   },
 
   list() {
-    return listWallets(expoSecretStorage);
+    return walletEngine.list();
   },
 
   setActive(walletId: string) {
-    return setActiveWallet(walletId, expoSecretStorage);
+    return walletEngine.setActive(walletId);
   },
 
   remove(walletId: string) {
-    return removeWallet(walletId, expoSecretStorage);
+    return walletEngine.remove(walletId);
   },
 
   confirmMnemonic(

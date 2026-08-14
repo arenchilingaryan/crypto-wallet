@@ -7,20 +7,11 @@ import {
   type PublicClient,
 } from "viem";
 
-// Uniswap V3 — единственный DEX кошелька. Обмен идёт напрямую через
-// контракты: QuoterV2 котирует (eth_call), SwapRouter02 исполняет.
-// Никаких сторонних агрегаторов и API-ключей.
-//
-// Адреса — официальные деплои Uniswap (docs.uniswap.org/contracts/v3),
-// по той же схеме Record<networkId, …>, что и knownTokens.
-
 export type UniswapDeployment = {
   swapRouter02: Address;
 
   quoterV2: Address;
 
-  // Роутер понимает нативный ETH только через WETH9:
-  // на входе заворачивает сам (msg.value), на выходе — unwrapWETH9.
   weth9: Address;
 };
 
@@ -48,13 +39,10 @@ export function getUniswapDeployment(
   return DEPLOYMENTS[networkId] ?? null;
 }
 
-// Комиссии пулов V3 в сотых долях bps: 0.01% / 0.05% / 0.3% / 1%.
 export const POOL_FEE_TIERS = [100, 500, 3000, 10000] as const;
 
 export type PoolFeeTier = (typeof POOL_FEE_TIERS)[number];
 
-// Маршрут фиксируется в момент котировки и валидируется при подписи:
-// либо один пул, либо два прыжка через WETH9.
 export type SwapRoute =
   | {
       kind: "single";
@@ -69,8 +57,6 @@ export type SwapRoute =
       feeOut: PoolFeeTier;
     };
 
-// Сентинелы SwapRouter02 (Constants.sol): recipient контракта — для
-// промежуточного WETH перед unwrapWETH9.
 export const ROUTER_ADDRESS_THIS =
   "0x0000000000000000000000000000000000000002" as Address;
 
@@ -190,18 +176,13 @@ function encodeViaWethPath(
   );
 }
 
-// Параметры обмена, которых достаточно, чтобы ДЕТЕРМИНИРОВАННО
-// восстановить calldata. Подпись сверяет байты через повторную кодировку —
-// как encodeErc20Transfer в переводах.
 export type SwapCallInput = {
-  // Роутинговые адреса: нативный ETH уже заменён на WETH9.
   routeTokenIn: Address;
 
   routeTokenOut: Address;
 
   route: SwapRoute;
 
-  // Кошелёк-получатель результата обмена.
   recipient: Address;
 
   amountIn: bigint;
@@ -221,8 +202,6 @@ export function encodeSwapCalldata(input: SwapCallInput): {
   data: Hex;
   value: bigint;
 } {
-  // Промежуточный получатель: при выходе в ETH токены WETH остаются
-  // на роутере и разворачиваются вторым вызовом мультиколла.
   const swapRecipient = input.nativeOut
     ? ROUTER_ADDRESS_THIS
     : input.recipient;
@@ -300,7 +279,6 @@ export function encodeSwapCalldata(input: SwapCallInput): {
   return {
     data,
 
-    // ETH на входе едет как msg.value — роутер завернёт его в WETH сам.
     value: input.nativeIn ? input.amountIn : 0n,
   };
 }
@@ -310,8 +288,6 @@ export type SwapQuoteResult = {
 
   amountOut: bigint;
 
-  // Оценка квотера — газ самого свопа, без 21k и калдаты. Годится
-  // для сравнения маршрутов и грубого прогноза до approve.
   quoterGasEstimate: bigint;
 };
 
@@ -401,9 +377,6 @@ async function quoteViaWeth(
   };
 }
 
-// Лучший маршрут: все одиночные пулы плюс — когда ни одна из сторон
-// не WETH — два прыжка через WETH по основным тирам. Пулы, которых нет,
-// просто реверятся в квотере и выпадают из кандидатов.
 export async function quoteBestSwapRoute(
   client: PublicClient,
   deployment: UniswapDeployment,

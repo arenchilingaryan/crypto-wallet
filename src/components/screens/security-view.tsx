@@ -5,10 +5,20 @@ import { ActivityIndicator, Pressable, View } from "react-native";
 import { AssetIcon } from "@/components/asset-icon";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+import { Button } from "@/components/ui/button";
+
+import {
+  describeRemaining,
+  FREEZE_DURATION_MS,
+} from "@/core/security/panicFreeze";
 
 import { Colors } from "@/constants/theme";
 
-import type { ApprovalScan, TokenApproval } from "@/core/blockchain/getApprovals";
+import type {
+  ApprovalRisk,
+  ApprovalScan,
+  TokenApproval,
+} from "@/core/blockchain/getApprovals";
 
 import { formatUsd, shortenAddress } from "@/utils/format";
 
@@ -22,6 +32,10 @@ type SecurityViewProps = {
   error: string | null;
 
   onRevoke: (approval: TokenApproval) => void;
+
+  freeze: { frozen: boolean; remainingMs: number };
+
+  onFreeze: () => void;
 };
 
 function formatAllowance(approval: TokenApproval) {
@@ -42,21 +56,28 @@ function formatAllowance(approval: TokenApproval) {
   })} ${approval.tokenSymbol}`;
 }
 
+function riskTone(risk: ApprovalRisk) {
+  if (risk === "critical" || risk === "high") {
+    return "danger" as const;
+  }
+
+  return risk === "medium" ? ("warning" as const) : ("muted" as const);
+}
+
 export function SecurityView({
   scan,
   loading,
   error,
+  freeze,
+  onFreeze,
   onRevoke,
 }: SecurityViewProps) {
   const approvals = scan?.approvals ?? [];
 
-  const totalExposure = approvals.reduce(
-    (total, approval) => total + (approval.exposureUsd ?? 0),
-    0,
-  );
+  const totalExposure = scan?.totalExposureUsd ?? 0;
 
-  const unlimitedCount = approvals.filter(
-    (approval) => approval.unlimited,
+  const riskyCount = approvals.filter(
+    (approval) => approval.risk === "critical" || approval.risk === "high",
   ).length;
 
   return (
@@ -65,30 +86,82 @@ export function SecurityView({
         Security
       </AppText>
 
-      {/* Покрытие названо прямо: пусто здесь — «среди проверенных нет». */}
+      {freeze.frozen ? (
+        <View style={styles.summary}>
+          <AppText variant="overline" tone="danger">
+            Frozen
+          </AppText>
+
+          <AppText variant="bodyStrong" tone="paper">
+            Signing is blocked for another {describeRemaining(freeze.remainingMs)}
+          </AppText>
+
+          <AppText variant="caption" tone="muted">
+            Nothing can be sent, swapped or approved until the freeze runs out.
+            It cannot be lifted early, not even with your PIN — that is the
+            point of it.
+          </AppText>
+        </View>
+      ) : (
+        <View style={styles.summary}>
+          <AppText variant="overline" tone="muted">
+            If someone is standing over you
+          </AppText>
+
+          <AppText variant="caption" tone="muted">
+            Freezing blocks every signature on this device for{" "}
+            {describeRemaining(FREEZE_DURATION_MS)}. You cannot undo it, so
+            there is nothing anyone can force you to undo. Your coins stay where
+            they are and your recovery phrase still works on another device.
+          </AppText>
+
+          <Button title="Freeze this wallet" variant="secondary" onPress={onFreeze} />
+        </View>
+      )}
+
       <AppText variant="caption" tone="muted" style={styles.notice}>
         {scan
           ? `Checked ${scan.checkedTokens} token${
               scan.checkedTokens === 1 ? "" : "s"
-            } against ${scan.checkedSpenders} known contracts.` +
-            " Approvals to contracts outside this list are not shown."
+            } against ${scan.checkedSpenders} known spenders, direct and via Permit2.` +
+            (scan.expiredCount > 0
+              ? ` ${scan.expiredCount} expired permission${
+                  scan.expiredCount === 1 ? "" : "s"
+                } ignored.`
+              : "") +
+            (scan.uncertainCount > 0
+              ? ` ${scan.uncertainCount} permission${
+                  scan.uncertainCount === 1 ? " is" : "s are"
+                } shown without a dollar figure: its limit or price could not be read, so treat the amount as unknown rather than small.`
+              : "") +
+            " Permissions to contracts outside this list are not shown."
           : "Approvals let a contract move your tokens until you revoke them."}
       </AppText>
 
       {approvals.length > 0 && (
         <View style={styles.summary}>
           <AppText variant="overline" tone="muted">
-            At risk right now
+            Maximum blast radius
           </AppText>
 
           <AppText variant="title" tone="paper" tabular>
             {formatUsd(totalExposure)}
           </AppText>
 
-          <AppText variant="caption" tone={unlimitedCount > 0 ? "warning" : "muted"}>
-            {approvals.length} active approval
+          <AppText
+            variant="caption"
+            tone={riskyCount > 0 ? "danger" : "muted"}
+          >
+            {approvals.length} active permission
             {approvals.length === 1 ? "" : "s"}
-            {unlimitedCount > 0 ? ` · ${unlimitedCount} unlimited` : ""}
+            {riskyCount > 0 ? ` · ${riskyCount} risky` : ""}
+          </AppText>
+
+          <AppText variant="caption" tone="muted">
+            The most these contracts could take from your current balances,
+            counting a Permit2 budget as spendable because one signature
+            releases it. Each balance is counted once, however many contracts
+            can reach it.
           </AppText>
         </View>
       )}
@@ -129,7 +202,15 @@ export function SecurityView({
               />
 
               <View style={styles.approvalIdentity}>
-                <AppText variant="bodyStrong">{approval.tokenSymbol}</AppText>
+                <View style={styles.approvalTitle}>
+                  <AppText variant="bodyStrong">{approval.tokenSymbol}</AppText>
+
+                  <View style={styles.riskBadge}>
+                    <AppText variant="caption" tone={riskTone(approval.risk)}>
+                      {approval.risk.toUpperCase()}
+                    </AppText>
+                  </View>
+                </View>
 
                 <AppText variant="caption" tone="muted" numberOfLines={1}>
                   {approval.spenderName}
@@ -154,6 +235,30 @@ export function SecurityView({
             </View>
 
             <View style={styles.approvalDetails}>
+              <View style={styles.detailRow}>
+                <AppText variant="caption" tone="muted">
+                  Channel
+                </AppText>
+
+                <AppText variant="caption" tone="secondary">
+                  {approval.channel === "permit2"
+                    ? "Permit2 permission"
+                    : "Direct approval"}
+                </AppText>
+              </View>
+
+              {approval.expiresAt !== null && (
+                <View style={styles.detailRow}>
+                  <AppText variant="caption" tone="muted">
+                    Expires
+                  </AppText>
+
+                  <AppText variant="caption" tone="secondary">
+                    {new Date(approval.expiresAt * 1000).toLocaleDateString()}
+                  </AppText>
+                </View>
+              )}
+
               <View style={styles.detailRow}>
                 <AppText variant="caption" tone="muted">
                   Purpose

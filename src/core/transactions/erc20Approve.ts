@@ -11,9 +11,6 @@ import { erc20Abi } from "@/core/blockchain/erc20Abi";
 
 import { TransactionValidationError } from "./nativeTransfer";
 
-// Разрешение ERC-20 под своп: спендер жёстко ограничен роутером
-// активной сети (context.expectedSpender), сумма — точная, не бесконечная.
-
 export type Erc20ApproveIntent = {
   kind: "erc20-approve";
 
@@ -35,10 +32,8 @@ export type Erc20ApproveIntent = {
 export type PreparedErc20Approve = Erc20ApproveIntent & {
   type: "eip1559";
 
-  // Транзакция идёт на контракт токена.
   to: Address;
 
-  // ETH не двигается.
   value: bigint;
 
   nonce: number;
@@ -48,7 +43,6 @@ export type PreparedErc20Approve = Erc20ApproveIntent & {
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
 
-  // approve(spender, amount).
   data: Hex;
 };
 
@@ -57,13 +51,11 @@ export type Erc20ApproveValidationContext = {
 
   expectedFrom: Address;
 
-  // Единственный допустимый спендер — роутер Uniswap активной сети.
   expectedSpender: Address;
 };
 
 export type PreparedErc20ApproveValidationContext =
   Erc20ApproveValidationContext & {
-    // ETH на комиссию: approve токены не двигает.
     balanceWei: bigint;
   };
 
@@ -236,7 +228,6 @@ export function validatePreparedErc20ApproveForSigning(
     );
   }
 
-  // Integrity: calldata — ровно approve(spender, amount).
   const expectedData = encodeErc20Approve(
     validatedIntent.spender,
     validatedIntent.amount,

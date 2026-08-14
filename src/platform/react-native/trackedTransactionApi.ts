@@ -8,12 +8,13 @@ import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer"
 import type { PreparedSwap } from "@/core/transactions/swap";
 
 import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
+import { creditedFromLogs } from "@/core/transactions/executionFacts";
 
-import { getActiveWallet } from "@/core/wallet/walletStore";
+import { walletEngine } from "./compositionRoot";
 
 import { ethereumPublicClient } from "./ethereumPublicClient";
 
-import { expoSecretStorage } from "./expoSecretStorage";
+import { priceTag } from "./priceLookup";
 
 import {
   listTrackedTransactions,
@@ -26,8 +27,10 @@ export const trackedTransactionApi = {
     transaction: PreparedNativeTransfer,
 
     hash: Hash,
+
+    valueUsd: number | null = null,
   ): Promise<TrackedTransaction> {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       throw new Error("Active wallet not found");
@@ -60,6 +63,8 @@ export const trackedTransactionApi = {
 
       valueWei: transaction.value.toString(),
 
+      valueUsd,
+
       createdAt: Date.now(),
 
       status: "pending",
@@ -82,8 +87,10 @@ export const trackedTransactionApi = {
     transaction: PreparedErc20Transfer,
 
     hash: Hash,
+
+    valueUsd: number | null = null,
   ): Promise<TrackedTransaction> {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       throw new Error("Active wallet not found");
@@ -108,7 +115,6 @@ export const trackedTransactionApi = {
 
       from: transaction.from,
 
-      // Человеческий получатель — им активность и живёт.
       to: transaction.recipient,
 
       assetType: "erc20",
@@ -118,6 +124,8 @@ export const trackedTransactionApi = {
       valueWei: transaction.amount.toString(),
 
       tokenDecimals: transaction.tokenDecimals,
+
+      valueUsd,
 
       contractAddress: transaction.token,
 
@@ -144,7 +152,7 @@ export const trackedTransactionApi = {
 
     hash: Hash,
   ): Promise<TrackedTransaction> {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       throw new Error("Active wallet not found");
@@ -169,7 +177,6 @@ export const trackedTransactionApi = {
 
       from: transaction.from,
 
-      // Контрагент свопа — роутер.
       to: transaction.to,
 
       assetType: "swap",
@@ -184,11 +191,15 @@ export const trackedTransactionApi = {
 
       symbolOut: transaction.assetOut.symbol,
 
-      // Котировка на момент отправки; фактический выход может отличаться
-      // в пределах слиппеджа.
+      contractAddressOut: transaction.assetOut.address,
+
       valueOutWei: transaction.quotedAmountOut.toString(),
 
+      minAmountOutWei: transaction.minAmountOut.toString(),
+
       tokenOutDecimals: transaction.assetOut.decimals,
+
+      actualAmountOutWei: null,
 
       createdAt: Date.now(),
 
@@ -213,7 +224,7 @@ export const trackedTransactionApi = {
 
     hash: Hash,
   ): Promise<TrackedTransaction> {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       throw new Error("Active wallet not found");
@@ -269,7 +280,7 @@ export const trackedTransactionApi = {
   },
 
   async listRelatedToActiveWallet() {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       return [];
@@ -289,8 +300,16 @@ export const trackedTransactionApi = {
       .sort((a, b) => b.createdAt - a.createdAt);
   },
 
+  async listAllForDevice() {
+    const all = await listTrackedTransactions();
+
+    return all
+      .filter((transaction) => transaction.chainId === ACTIVE_NETWORK.chain.id)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+
   async listForActiveWallet() {
-    const wallet = await getActiveWallet(expoSecretStorage);
+    const wallet = await walletEngine.getActive();
 
     if (!wallet) {
       return [];
@@ -307,6 +326,20 @@ export const trackedTransactionApi = {
       .sort((a, b) => b.createdAt - a.createdAt);
   },
 
+  async backfillValueUsd(hash: Hash, symbol: string, amount: string) {
+    try {
+      const priced = await priceTag(symbol, amount);
+
+      if (priced === null) {
+        return;
+      }
+
+      await updateTrackedTransaction(hash, { valueUsd: priced });
+    } catch {
+      void 0;
+    }
+  },
+
   async refreshPending() {
     const transactions = await this.listRelatedToActiveWallet();
 
@@ -321,6 +354,17 @@ export const trackedTransactionApi = {
 
         const status = receipt.status === "success" ? "confirmed" : "reverted";
 
+        const credited =
+          status === "confirmed" && transaction.contractAddressOut
+            ? creditedFromLogs({
+                logs: receipt.logs,
+
+                owner: transaction.from,
+
+                token: transaction.contractAddressOut,
+              })
+            : null;
+
         await updateTrackedTransaction(transaction.hash, {
           status,
 
@@ -330,17 +374,15 @@ export const trackedTransactionApi = {
 
           effectiveGasPriceWei: receipt.effectiveGasPrice.toString(),
 
+          actualAmountOutWei: credited === null ? null : credited.toString(),
+
           confirmedAt: Date.now(),
         });
       } catch {
-        /*
-         * Receipt
-         */
+        void 0;
       }
     }
 
-    // Отдаём related, а не только созданные этим кошельком: локальная
-    // запись перевода между своими кошельками должна быть видна и получателю.
     return this.listRelatedToActiveWallet();
   },
 };

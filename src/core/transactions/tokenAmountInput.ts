@@ -1,7 +1,5 @@
 import { parseUnits } from "viem";
 
-// Аналог ethAmountInput, но точность задаётся decimals токена.
-
 export function normalizeTokenAmountInput(
   input: string,
   decimals: number,

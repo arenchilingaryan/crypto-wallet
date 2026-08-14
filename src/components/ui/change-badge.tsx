@@ -4,10 +4,8 @@ import { styles } from "./change-badge.styles";
 import { AppText } from "./text";
 
 type ChangeBadgeProps = {
-  /** Проценты за период; null — данных нет, бейдж не рисуется. */
   changePercent: number | null;
 
-  /** Подпись периода справа от процента. */
   period?: string;
 };
 

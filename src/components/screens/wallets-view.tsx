@@ -2,20 +2,20 @@ import { Pressable, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
-import type { WalletRecord } from "@/core/wallet/walletStore";
+import type { WalletAccount } from "@/core/wallet/walletEngine";
 import { shortenAddress } from "@/utils/format";
 
 import { styles } from "./wallets-view.styles";
 
 type WalletsViewProps = {
-  wallets: WalletRecord[];
+  wallets: WalletAccount[];
   activeWalletId: string | null;
   error: string | null;
 
   onSelect: (walletId: string) => void;
   onCreate: () => void;
   onImport: () => void;
-  onRemove: (wallet: WalletRecord) => void;
+  onRemove: (wallet: WalletAccount) => void;
   onBack: () => void;
 };
 

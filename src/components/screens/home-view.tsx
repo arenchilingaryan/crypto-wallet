@@ -30,6 +30,10 @@ import {
   assetKey,
   type PortfolioChange,
 } from "@/core/blockchain/getPortfolioChange";
+import {
+  describeValuation,
+  valuePortfolio,
+} from "@/core/blockchain/valuePortfolio";
 
 import { formatUsd } from "@/utils/format";
 
@@ -57,6 +61,10 @@ export function HomeView({
   const router = useRouter();
 
   const [addressCopied, setAddressCopied] = useState(false);
+
+  const valuation = portfolio ? valuePortfolio(portfolio.assets) : null;
+
+  const valuationNote = valuation ? describeValuation(valuation) : null;
 
   async function copyAddress() {
     await Clipboard.setStringAsync(address);
@@ -166,8 +174,16 @@ export function HomeView({
           tabular
           style={styles.balanceValue}
         >
-          {portfolio ? formatUsd(portfolio.totalUsd) : "—"}
+          {valuation && valuation.totalUsd !== null
+            ? formatUsd(valuation.totalUsd)
+            : "—"}
         </AppText>
+
+        {valuationNote && (
+          <AppText variant="caption" tone="muted" style={styles.balanceNote}>
+            {valuationNote}
+          </AppText>
+        )}
 
         <ChangeBadge
           changePercent={change?.totalChangePercent ?? null}

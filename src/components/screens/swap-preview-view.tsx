@@ -1,17 +1,21 @@
 import { Pressable, View } from "react-native";
 
+import { SecurityBriefing } from "@/components/security/security-briefing";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
 import type {
   SwapApprovePreview,
   SwapPreview,
 } from "@/core/transactions/createSwapPreview";
+import type { SecurityReview } from "@/core/security/securityReview";
 import { shortenAddress } from "@/utils/format";
 
 import { styles } from "./swap-preview-view.styles";
 
 type SwapPreviewViewProps = {
   preview: SwapPreview | SwapApprovePreview;
+
+  review: SecurityReview | null;
 
   onBack: () => void;
 
@@ -20,13 +24,16 @@ type SwapPreviewViewProps = {
 
 export function SwapPreviewView({
   preview,
+  review,
   onBack,
   onConfirm,
 }: SwapPreviewViewProps) {
   const isApprove = preview.kind === "swap-approve";
 
+  const blocked = review?.decision.decision === "block";
+
   return (
-    <Screen>
+    <Screen scroll>
       <View style={styles.header}>
         <Pressable
           onPress={onBack}
@@ -100,6 +107,8 @@ export function SwapPreviewView({
         />
       </View>
 
+      {review && <SecurityBriefing review={review} />}
+
       <AppText variant="caption" tone="muted" style={styles.notice}>
         {isApprove
           ? "The approval only lets the Uniswap router spend this exact amount. The swap itself is a separate transaction."
@@ -107,14 +116,20 @@ export function SwapPreviewView({
       </AppText>
 
       <Pressable
+        disabled={blocked}
         onPress={onConfirm}
         style={({ pressed }) => [
           styles.confirmButton,
           pressed && styles.pressed,
+          blocked && styles.disabled,
         ]}
       >
         <AppText variant="label">
-          {isApprove ? "Approve" : "Confirm swap"}
+          {blocked
+            ? "This wallet will not sign this"
+            : isApprove
+              ? "Approve"
+              : "Confirm swap"}
         </AppText>
       </Pressable>
     </Screen>

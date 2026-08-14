@@ -35,14 +35,8 @@ export function AssetView({
   onReceive,
   onBack,
 }: AssetViewProps) {
-  // Portfolio spot first: the market-data price is the LAST SAMPLE of
-  // the selected window (a day old on 1M/1Y), so preferring it would
-  // make the headline price jump when switching ranges.
   const currentPriceUsd = asset.priceUsd ?? marketData?.priceUsd ?? null;
 
-  // The series ends at the price on screen, and the percent is computed
-  // from the same pair the user sees: window start → headline price.
-  // Otherwise the label describes a number that is not displayed.
   const seriesPoints = marketData?.points ?? [];
 
   const chartPoints =
@@ -134,7 +128,6 @@ export function AssetView({
               return;
             }
 
-            // Своп открывается уже с этой монетой на стороне «You pay».
             router.push({
               pathname: "/swap",
               params: {

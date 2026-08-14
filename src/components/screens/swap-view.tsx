@@ -4,10 +4,13 @@ import { AssetIcon } from "@/components/asset-icon";
 import { SwapIcon } from "@/components/icons/swap-icon";
 import { Button } from "@/components/ui/button";
 import { Footer } from "@/components/ui/footer";
+import { SecurityBriefing } from "@/components/security/security-briefing";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
 
 import { Colors } from "@/constants/theme";
+
+import type { SecurityReview } from "@/core/security/securityReview";
 
 import { styles } from "./swap-view.styles";
 
@@ -22,12 +25,13 @@ export type SwapSide = {
 
   balance: string | null;
 
-  /** Нативной монете рисуется её собственная иконка, а не инициалы. */
   type?: "native" | "erc20";
 };
 
 type SwapViewProps = {
   pay?: SwapSide;
+
+  review?: SecurityReview | null;
 
   receive?: SwapSide;
 
@@ -79,7 +83,6 @@ type TokenCardProps = {
 
   onSelectToken?: () => void;
 
-  // Платёжная сторона редактируется; получаемая — только показывает котировку.
   onChangeAmount?: (value: string) => void;
 
   amountLoading?: boolean;
@@ -163,6 +166,7 @@ function TokenCard({
 
 export function SwapView({
   pay = EMPTY_SIDE,
+  review = null,
   receive = EMPTY_SIDE,
   rate = "—",
   networkFee = "—",
@@ -214,6 +218,10 @@ export function SwapView({
         onSelectToken={onSelectReceiveToken}
         amountLoading={quoteLoading}
       />
+
+      {review && review.decision.decision === "block" && (
+        <SecurityBriefing review={review} />
+      )}
 
       {error && (
         <AppText variant="caption" tone="danger" style={styles.error}>

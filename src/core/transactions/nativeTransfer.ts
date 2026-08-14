@@ -29,8 +29,6 @@ export type PreparedNativeTransfer = {
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
 
-  // Обычный ETH transfer.
-  // Никакого contract calldata.
   data: "0x";
 };
 

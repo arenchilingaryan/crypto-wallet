@@ -2,6 +2,7 @@ import { Pressable, View } from "react-native";
 
 import { formatEther } from "viem";
 
+import { ExecutionReport } from "@/components/execution-report";
 import { BackIcon } from "@/components/icons/back-icon";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
@@ -59,7 +60,7 @@ export function TransactionDetailsView({
   transaction,
   onBack,
 }: TransactionDetailsViewProps) {
-  const amount = formatEther(transaction.valueWei);
+  const amount = transaction.displayAmount;
 
   const fee =
     transaction.networkFeeWei !== null
@@ -67,7 +68,7 @@ export function TransactionDetailsView({
       : null;
 
   return (
-    <Screen style={styles.screen}>
+    <Screen scroll style={styles.screen}>
       <View style={styles.header}>
         <Pressable
           onPress={onBack}
@@ -88,8 +89,36 @@ export function TransactionDetailsView({
         </AppText>
 
         <AppText variant="display" tabular>
-          {amount} ETH
+          {amount} {transaction.symbol}
         </AppText>
+
+        {transaction.kind === "approve" && (
+          <AppText variant="caption" tone="warning">
+            Spending allowance, not an amount that moved
+          </AppText>
+        )}
+
+        {transaction.kind === "swap" && transaction.symbolOut && (
+          <AppText
+            variant="caption"
+            tone={
+              transaction.status === "reverted"
+                ? "danger"
+                : transaction.amountOutIsQuote
+                  ? "muted"
+                  : "success"
+            }
+            tabular
+          >
+            {transaction.status === "reverted"
+              ? `${transaction.symbolOut} not received`
+              : !transaction.amountOut
+                ? `for ${transaction.symbolOut}`
+                : transaction.amountOutIsQuote
+                  ? `~${transaction.amountOut} ${transaction.symbolOut} quoted`
+                  : `for ${transaction.amountOut} ${transaction.symbolOut}`}
+          </AppText>
+        )}
       </View>
 
       <View style={styles.card}>
@@ -121,6 +150,10 @@ export function TransactionDetailsView({
           selectable
         />
       </View>
+
+      {transaction.execution && (
+        <ExecutionReport execution={transaction.execution} />
+      )}
     </Screen>
   );
 }

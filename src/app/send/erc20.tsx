@@ -13,6 +13,7 @@ import {
 } from "viem";
 
 import { PinView } from "@/components/screens/pin-view";
+import type { SecurityReview } from "@/core/security/securityReview";
 import { SendErc20View } from "@/components/screens/send-erc20-view";
 import { SendPreviewView } from "@/components/screens/send-preview-view";
 import {
@@ -32,6 +33,11 @@ import {
   normalizeTokenAmountInput,
   parseTokenAmountInput,
 } from "@/core/transactions/tokenAmountInput";
+
+import { foldPolicyDecision } from "@/core/security/policyDecision";
+
+import { policyApi } from "@/platform/react-native/policyApi";
+import { describePinFailure } from "@/core/security/pin";
 
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
@@ -88,8 +94,11 @@ export default function SendErc20Screen() {
 
   const [reauthing, setReauthing] = useState(false);
 
-  // null = ещё не знаем; false = PIN не настроен, перед отправкой создаём.
   const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
+
+  const [amountUsd, setAmountUsd] = useState<number | null>(null);
+
+  const [review, setReview] = useState<SecurityReview | null>(null);
 
   const quoteRequestId = useRef(0);
 
@@ -162,6 +171,8 @@ export default function SendErc20Screen() {
 
   useEffect(() => {
     setQuote(null);
+
+    setReview(null);
 
     if (!token) {
       return;
@@ -270,6 +281,7 @@ export default function SendErc20Screen() {
   }, [token, to, amount]);
 
   const canContinue =
+    review?.decision.decision !== "block" &&
     !loading &&
     !quoteLoading &&
     !inputError &&
@@ -298,6 +310,30 @@ export default function SendErc20Screen() {
     try {
       setLoading(true);
       setError(null);
+
+      const verdict = await policyApi.check({
+        recipient: getAddress(recipient),
+
+        symbol: token.symbol,
+
+        amount,
+      });
+
+      setReview(verdict.review);
+
+      const blocked = foldPolicyDecision(verdict.review.decision, {
+        allow: () => null,
+
+        uncovered: () => null,
+
+        block: (decision) => decision.message,
+      });
+
+      if (blocked !== null) {
+        return;
+      }
+
+      setAmountUsd(verdict.amountUsd);
 
       const prepared = await transactionApi.prepareErc20Transfer({
         token: token.address,
@@ -332,23 +368,24 @@ export default function SendErc20Screen() {
 
     let authorization: string;
 
+    let reservationId: string | null = null;
+
     try {
       const result = await securityApi.reauthorizeTransaction(
         pin,
         transaction,
+        { amountUsd },
       );
 
       if (!result.ok) {
-        if (result.reason === "locked") {
-          return `Too many attempts. Try again in ${Math.ceil(
-            result.retryAfterMs / 1000,
-          )}s.`;
-        }
-
-        return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+        return result.reason === "outflow-reserved"
+          ? result.message
+          : describePinFailure(result);
       }
 
       authorization = result.authorization;
+
+      reservationId = result.reservationId;
     } catch (authorizationError) {
       console.error("Transaction authorization failed:", authorizationError);
 
@@ -371,7 +408,13 @@ export default function SendErc20Screen() {
 
       setTransactionHash(hash);
 
-      await trackedTransactionApi.trackErc20Transfer(transaction, hash);
+      await trackedTransactionApi.trackErc20Transfer(transaction, hash, amountUsd);
+
+      await securityApi.releaseOutflow(reservationId);
+
+      if (amountUsd === null && token) {
+        void trackedTransactionApi.backfillValueUsd(hash, token.symbol, amount);
+      }
 
       setSendStatus("pending");
       try {
@@ -389,6 +432,8 @@ export default function SendErc20Screen() {
       return null;
     } catch (submissionError) {
       console.error("Transaction submission failed:", submissionError);
+
+      await securityApi.releaseOutflow(reservationId);
 
       setSendStatus(null);
 
@@ -457,12 +502,10 @@ export default function SendErc20Screen() {
       );
     }
 
-    // Кошельки без PIN: перед первой отправкой создаём PIN
-    // и тем же вводом авторизуем транзакцию.
     if (!pinConfigured) {
       return (
         <PinView
-          // key: setup и reauth не должны делить инстанс.
+
           key="send-erc20-setup"
           mode="setup"
           onCancel={() => {
@@ -506,6 +549,7 @@ export default function SendErc20Screen() {
     return (
       <SendPreviewView
         preview={preview}
+        review={review}
         onBack={() => {
           setTransaction(null);
           setTransactionHash(null);
@@ -524,6 +568,7 @@ export default function SendErc20Screen() {
       symbol={token.symbol}
       to={to}
       amount={amount}
+      review={review}
       error={inputError ?? error}
       loading={loading}
       onChangeTo={(value) => {

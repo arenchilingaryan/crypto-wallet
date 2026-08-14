@@ -18,7 +18,6 @@ export type SwapPreview = {
 
   quotedAmountOut: string;
 
-  // Гарантированный минимум с учётом слиппеджа — то, что зашито в calldata.
   minAmountOut: string;
 
   rate: string;
@@ -43,7 +42,6 @@ export type SwapApprovePreview = {
 
   amount: string;
 
-  // Спендер — роутер Uniswap.
   spender: string;
 
   maximumNetworkFeeEth: string;
@@ -79,7 +77,6 @@ export function createSwapPreview(
     transaction.assetOut.decimals,
   );
 
-  // Курс из самой котировки: сколько выхода за единицу входа.
   const rateValue =
     Number(quotedOut) > 0 && Number(amountIn) > 0
       ? Number(quotedOut) / Number(amountIn)

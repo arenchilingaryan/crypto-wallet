@@ -42,6 +42,16 @@ export function RevokePreviewView({
           divider
         />
 
+        <Row
+          label="Channel"
+          value={
+            preview.channel === "permit2"
+              ? "Permit2 permission"
+              : "Direct ERC-20 approval"
+          }
+          divider
+        />
+
         <Row label="Spender" value={preview.spenderName} divider />
 
         <Row

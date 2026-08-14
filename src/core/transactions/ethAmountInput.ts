@@ -11,7 +11,6 @@ export function normalizeEthAmountInput(input: string): string | null {
     value = `0${value}`;
   }
 
-  // До 18 знаков после точки — ETH wei precision.
   if (!/^\d*(?:\.\d{0,18})?$/.test(value)) {
     return null;
   }

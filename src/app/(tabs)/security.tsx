@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { Alert } from "react-native";
+
 import { useFocusEffect } from "expo-router";
 
 import type { Hash } from "viem";
@@ -21,6 +23,15 @@ import type {
 import { getPortfolio } from "@/core/blockchain/getPortfolio";
 import { createRevokePreview } from "@/core/transactions/createRevokePreview";
 import type { PreparedErc20Revoke } from "@/core/transactions/erc20Revoke";
+import type { PreparedPermit2Revoke } from "@/core/transactions/permit2Revoke";
+
+import { describePinFailure } from "@/core/security/pin";
+import {
+  describeRemaining,
+  FREEZE_DURATION_MS,
+} from "@/core/security/panicFreeze";
+
+import { panicApi } from "@/platform/react-native/panicApi";
 
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
@@ -34,9 +45,9 @@ export default function SecurityScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
-  const [transaction, setTransaction] = useState<PreparedErc20Revoke | null>(
-    null,
-  );
+  const [transaction, setTransaction] = useState<
+    PreparedErc20Revoke | PreparedPermit2Revoke | null
+  >(null);
 
   const [reauthing, setReauthing] = useState(false);
 
@@ -48,12 +59,55 @@ export default function SecurityScreen() {
 
   const [reloadNonce, setReloadNonce] = useState(0);
 
+  const [freeze, setFreeze] = useState({ frozen: false, remainingMs: 0 });
+
   useEffect(() => {
     void securityApi.hasPin().then(setPinConfigured);
   }, []);
 
-  // Перечитываем на каждом фокусе: разрешения меняются свопами из
-  // соседних экранов, а вкладка не размонтируется.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      const refresh = () => {
+        void panicApi.status().then((status) => {
+          if (active) {
+            setFreeze(status);
+          }
+        });
+      };
+
+      refresh();
+
+      const timer = setInterval(refresh, 30_000);
+
+      return () => {
+        active = false;
+
+        clearInterval(timer);
+      };
+    }, []),
+  );
+
+  function handleFreeze() {
+    Alert.alert(
+      "Freeze this wallet?",
+      `Nothing can be sent, swapped or approved from this device for ${describeRemaining(
+        FREEZE_DURATION_MS,
+      )}. You will not be able to lift it early, even with your PIN. Your coins stay where they are.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Freeze",
+          style: "destructive",
+          onPress: () => {
+            void panicApi.freeze().then(() => panicApi.status()).then(setFreeze);
+          },
+        },
+      ],
+    );
+  }
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -101,15 +155,26 @@ export default function SecurityScreen() {
     try {
       setError(null);
 
-      const prepared = await transactionApi.prepareErc20Revoke({
-        token: approval.token,
+      const prepared =
+        approval.channel === "permit2"
+          ? await transactionApi.preparePermit2Revoke({
+              token: approval.token,
 
-        spender: approval.spender,
+              spender: approval.spender,
 
-        tokenSymbol: approval.tokenSymbol,
+              tokenSymbol: approval.tokenSymbol,
 
-        spenderName: approval.spenderName,
-      });
+              spenderName: approval.spenderName,
+            })
+          : await transactionApi.prepareErc20Revoke({
+              token: approval.token,
+
+              spender: approval.spender,
+
+              tokenSymbol: approval.tokenSymbol,
+
+              spenderName: approval.spenderName,
+            });
 
       setTransaction(prepared);
     } catch (prepareError) {
@@ -141,13 +206,9 @@ export default function SecurityScreen() {
       const result = await securityApi.reauthorizeTransaction(pin, transaction);
 
       if (!result.ok) {
-        if (result.reason === "locked") {
-          return `Too many attempts. Try again in ${Math.ceil(
-            result.retryAfterMs / 1000,
-          )}s.`;
-        }
-
-        return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+        return result.reason === "outflow-reserved"
+          ? result.message
+          : describePinFailure(result);
       }
 
       authorization = result.authorization;
@@ -160,10 +221,10 @@ export default function SecurityScreen() {
     }
 
     try {
-      const signed = await signerApi.signErc20Revoke(
-        transaction,
-        authorization,
-      );
+      const signed =
+        transaction.kind === "permit2-revoke"
+          ? await signerApi.signPermit2Revoke(transaction, authorization)
+          : await signerApi.signErc20Revoke(transaction, authorization);
 
       setReauthing(false);
 
@@ -208,7 +269,6 @@ export default function SecurityScreen() {
         onDone={() => {
           resetFlow();
 
-          // Список пересобираем: разрешения только что изменились.
           setReloadNonce((nonce) => nonce + 1);
         }}
       />
@@ -274,6 +334,8 @@ export default function SecurityScreen() {
       scan={scan}
       loading={loading}
       error={error}
+      freeze={freeze}
+      onFreeze={handleFreeze}
       onRevoke={(approval) => {
         void handleRevoke(approval);
       }}

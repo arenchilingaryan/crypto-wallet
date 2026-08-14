@@ -67,9 +67,6 @@ export default function TabsLayout() {
     return <Redirect href="/onboarding" />;
   }
 
-  // Вкладки — только разделы, в которые возвращаются. Send/Receive/Swap
-  // это задачи с началом и концом: они живут быстрыми действиями на
-  // главной и стековыми роутами, чтобы экран размонтировался после выхода.
   return (
     <Tabs
       tabBar={(props) => <TabBar {...props} />}

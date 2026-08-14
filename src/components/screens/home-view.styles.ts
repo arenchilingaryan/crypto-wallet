@@ -3,7 +3,6 @@ import { StyleSheet } from "react-native";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 
 export const styles = StyleSheet.create({
-  // Шапка: слева кошелёк и его адрес, справа круглые кнопки.
   header: {
     flexDirection: "row",
 
@@ -79,7 +78,6 @@ export const styles = StyleSheet.create({
     opacity: 0.6,
   },
 
-  // Баланс — смысловой центр экрана.
   balance: {
     alignItems: "center",
 
@@ -92,7 +90,11 @@ export const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  // Ряд действий под балансом.
+  balanceNote: {
+    textAlign: "center",
+    maxWidth: 280,
+  },
+
   actions: {
     flexDirection: "row",
 
@@ -116,7 +118,6 @@ export const styles = StyleSheet.create({
     borderTopColor: Colors.border,
   },
 
-  // Хвост списка: чтобы последняя строка не липла к доку.
   listFooter: {
     height: Spacing.xl,
   },

@@ -1,15 +1,23 @@
-import type { RandomSource } from "@/core/wallet/ports/randomSource";
-import type { SecretStorage } from "@/core/wallet/ports/secretStorage";
+import type { RandomSource } from "@/core/ports/randomSource";
+import type { KeyValueStorage } from "@/core/ports/keyValueStorage";
 
 import {
-    MAX_PIN_ATTEMPTS,
-    PIN_LENGTH,
-    PIN_LOCKOUT_MS,
-    SECURITY_STORAGE_KEYS,
+  createPinVerifier,
+  derivePinHash,
+  parsePinVerifier,
+  safeEqual,
+  serializePinVerifier,
+} from "./pinVerifier";
+
+import {
+  MAX_PIN_ATTEMPTS,
+  PIN_LENGTH,
+  PIN_LOCKOUT_MS,
+  SECURITY_STORAGE_KEYS,
 } from "./security.constants";
 
 type PinDependencies = {
-  storage: SecretStorage;
+  storage: KeyValueStorage;
   random: RandomSource;
   hash: (value: string) => Promise<string>;
 };
@@ -27,7 +35,28 @@ export type VerifyPinResult =
       ok: false;
       reason: "locked";
       retryAfterMs: number;
+    }
+  | {
+      ok: false;
+      reason: "unusable";
     };
+
+export function describePinFailure(
+  result: Extract<VerifyPinResult, { ok: false }>,
+): string {
+  switch (result.reason) {
+    case "locked":
+      return `Too many attempts. Try again in ${Math.ceil(
+        result.retryAfterMs / 1000,
+      )}s.`;
+
+    case "unusable":
+      return "The stored PIN cannot be read on this device. Restore this wallet from its recovery phrase.";
+
+    case "invalid":
+      return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+  }
+}
 
 function validatePin(pin: string) {
   return new RegExp(`^\\d{${PIN_LENGTH}}$`).test(pin);
@@ -39,45 +68,46 @@ function bytesToHex(bytes: Uint8Array) {
     .join("");
 }
 
-function safeEqual(a: string, b: string) {
-  if (a.length !== b.length) {
-    return false;
+export async function hasPin(storage: KeyValueStorage): Promise<boolean> {
+  const verifier = await storage.get(SECURITY_STORAGE_KEYS.pinVerifier);
+
+  if (verifier !== null) {
+    return true;
   }
 
-  let difference = 0;
+  const legacyHash = await storage.get(SECURITY_STORAGE_KEYS.legacyPinHash);
 
-  for (let index = 0; index < a.length; index++) {
-    difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
+  const legacySalt = await storage.get(SECURITY_STORAGE_KEYS.legacyPinSalt);
 
-  return difference === 0;
+  return Boolean(legacyHash && legacySalt);
 }
 
-export async function hasPin(storage: SecretStorage): Promise<boolean> {
-  const hash = await storage.get(SECURITY_STORAGE_KEYS.pinHash);
+async function clearLegacyPin(storage: KeyValueStorage) {
+  await storage.remove(SECURITY_STORAGE_KEYS.legacyPinSalt);
 
-  const salt = await storage.get(SECURITY_STORAGE_KEYS.pinSalt);
-
-  return Boolean(hash && salt);
+  await storage.remove(SECURITY_STORAGE_KEYS.legacyPinHash);
 }
 
 export async function createPin(
   pin: string,
-  { storage, random, hash }: PinDependencies,
+  { storage, random }: PinDependencies,
+  presetVaultSalt?: string,
 ): Promise<void> {
   if (!validatePin(pin)) {
     throw new Error(`PIN must contain exactly ${PIN_LENGTH} digits`);
   }
 
-  const saltBytes = await random.getBytes(16);
+  const salt = bytesToHex(await random.getBytes(16));
 
-  const salt = bytesToHex(saltBytes);
+  const vaultSalt =
+    presetVaultSalt ?? bytesToHex(await random.getBytes(16));
 
-  const pinHash = await hash(`${salt}:${pin}`);
+  await storage.set(
+    SECURITY_STORAGE_KEYS.pinVerifier,
+    serializePinVerifier(createPinVerifier(pin, salt, vaultSalt)),
+  );
 
-  await storage.set(SECURITY_STORAGE_KEYS.pinSalt, salt);
-
-  await storage.set(SECURITY_STORAGE_KEYS.pinHash, pinHash);
+  await clearLegacyPin(storage);
 
   await storage.remove(SECURITY_STORAGE_KEYS.failedAttempts);
 
@@ -86,7 +116,7 @@ export async function createPin(
 
 export async function verifyPin(
   pin: string,
-  { storage, hash }: PinDependencies,
+  { storage, hash, random }: PinDependencies,
 ): Promise<VerifyPinResult> {
   if (!validatePin(pin)) {
     return {
@@ -101,11 +131,25 @@ export async function verifyPin(
   );
 
   const blockedUntil =
-    blockedUntilValue !== null ? Number(blockedUntilValue) : 0;
+    blockedUntilValue !== null && blockedUntilValue.trim() !== ""
+      ? Number(blockedUntilValue)
+      : 0;
 
   const now = Date.now();
 
-  if (Number.isFinite(blockedUntil) && blockedUntil > now) {
+  if (
+    blockedUntilValue !== null &&
+    blockedUntilValue.trim() !== "" &&
+    !Number.isFinite(blockedUntil)
+  ) {
+    return {
+      ok: false,
+      reason: "locked",
+      retryAfterMs: PIN_LOCKOUT_MS,
+    };
+  }
+
+  if (blockedUntil > now) {
     return {
       ok: false,
       reason: "locked",
@@ -113,17 +157,55 @@ export async function verifyPin(
     };
   }
 
-  const salt = await storage.get(SECURITY_STORAGE_KEYS.pinSalt);
+  const storedVerifier = await storage.get(SECURITY_STORAGE_KEYS.pinVerifier);
 
-  const expectedHash = await storage.get(SECURITY_STORAGE_KEYS.pinHash);
+  const verifier = parsePinVerifier(storedVerifier);
 
-  if (!salt || !expectedHash) {
-    throw new Error("PIN is not configured");
+  if (storedVerifier !== null && !verifier) {
+    return { ok: false, reason: "unusable" };
   }
 
-  const actualHash = await hash(`${salt}:${pin}`);
+  let matched: boolean;
 
-  if (safeEqual(actualHash, expectedHash)) {
+  if (verifier) {
+    matched = safeEqual(
+      derivePinHash(pin, verifier.salt, {
+        N: verifier.N,
+        r: verifier.r,
+        p: verifier.p,
+      }),
+      verifier.hash,
+    );
+
+    if (matched) {
+      await clearLegacyPin(storage);
+    }
+  } else {
+    const legacySalt = await storage.get(SECURITY_STORAGE_KEYS.legacyPinSalt);
+
+    const legacyHash = await storage.get(SECURITY_STORAGE_KEYS.legacyPinHash);
+
+    if (!legacySalt || !legacyHash) {
+      return { ok: false, reason: "unusable" };
+    }
+
+    matched = safeEqual(await hash(`${legacySalt}:${pin}`), legacyHash);
+
+    if (matched) {
+      const salt = bytesToHex(await random.getBytes(16));
+
+      const vaultSalt = bytesToHex(await random.getBytes(16));
+
+      await storage.set(
+        SECURITY_STORAGE_KEYS.pinVerifier,
+        serializePinVerifier(createPinVerifier(pin, salt, vaultSalt)),
+      );
+
+      await clearLegacyPin(storage);
+    }
+  }
+
+  if (matched) {
     await storage.remove(SECURITY_STORAGE_KEYS.failedAttempts);
 
     await storage.remove(SECURITY_STORAGE_KEYS.blockedUntil);

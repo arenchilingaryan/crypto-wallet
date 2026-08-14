@@ -108,11 +108,9 @@ export default function OnboardingScreen() {
     try {
       setImportError(null);
 
-      const wallet = walletApi.import(importMnemonic);
+      const account = await walletApi.importFromMnemonic(importMnemonic);
 
-      await walletApi.persist(wallet.mnemonic);
-
-      await finishWalletSetup(wallet.address);
+      await finishWalletSetup(account.address);
 
       setImportMnemonic("");
     } catch (error) {
@@ -124,12 +122,12 @@ export default function OnboardingScreen() {
 
   async function handleGenerateWallet() {
     try {
-      const wallet = await walletApi.generate();
+      const { address, recoveryPhrase } = await walletApi.prepare();
 
       setWalletState({
         status: "generated",
-        address: wallet.address,
-        mnemonic: wallet.mnemonic,
+        address,
+        mnemonic: recoveryPhrase,
       });
     } catch (error) {
       console.error("Wallet generation failed:", error);
@@ -178,9 +176,15 @@ export default function OnboardingScreen() {
       return;
     }
 
-    await walletApi.persist(walletState.mnemonic);
+    try {
+      const account = await walletApi.create(walletState.mnemonic);
 
-    await finishWalletSetup(walletState.address);
+      await finishWalletSetup(account.address);
+    } catch (error) {
+      console.error("Wallet creation failed:", error);
+
+      setConfirmationError("Could not save the wallet. Try again.");
+    }
   }
 
   if (walletState.status === "loading") {

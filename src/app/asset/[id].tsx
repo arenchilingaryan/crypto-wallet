@@ -36,12 +36,8 @@ export default function AssetScreen() {
   const [marketPending, setMarketPending] = useState(false);
   const [networkId, setNetworkId] = useState<string | null>(null);
 
-  // Guards against a slow response for an old range landing after
-  // a newer one; only the latest request may write state.
   const marketRequestId = useRef(0);
 
-  // The range whose data is actually on screen — failed switches
-  // revert here, never to a range the user never saw loaded.
   const loadedRange = useRef<MarketRange | null>(null);
 
   const router = useRouter();
@@ -81,8 +77,6 @@ export default function AssetScreen() {
         return item.contractAddress.toLowerCase() === assetId.toLowerCase();
       });
 
-      // Токен из поиска, которого ещё нет в портфеле: показываем
-      // карточку с нулевым балансом по реестру/метаданным.
       if (
         !foundAsset &&
         assetId !== "native" &&
@@ -126,8 +120,6 @@ export default function AssetScreen() {
       setAsset(foundAsset);
       setNetworkId(portfolio.networkId);
 
-      // Market data failing must not take the whole screen down —
-      // the asset, balance, and actions are already loaded.
       try {
         const requestId = ++marketRequestId.current;
 
@@ -182,9 +174,6 @@ export default function AssetScreen() {
     setRange(nextRange);
     setMarketPending(true);
 
-    // The chart keeps the previous series (dimmed) until the new one
-    // lands. A failure or an empty answer reverts the selection to the
-    // range whose data is on screen, so the highlight never lies.
     const requestId = ++marketRequestId.current;
 
     try {

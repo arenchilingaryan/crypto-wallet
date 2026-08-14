@@ -28,30 +28,18 @@ type PriceChartProps = {
   changePercent: number | null;
   points: PricePoint[];
   range: ChartRange;
-  /** New range is being fetched; the old series stays visible, dimmed. */
+
   loading?: boolean;
   onChangeRange?: (range: ChartRange) => void;
   availableRanges?: ChartRange[];
 };
 
-/** Keeps the stroke clear of the viewBox edges. */
 const CHART_PAD_Y = 14;
 
-/**
- * Series flatter than this fraction of its mid price render on a
- * proportionally compressed scale instead of stretching sensor noise
- * to full height — a stablecoin must not look like a volatile asset.
- */
 const MIN_DOMAIN_FRACTION = 0.002;
 
 const RANGES: ChartRange[] = ["1H", "1D", "1W", "1M", "1Y"];
 
-/**
- * Steffen's monotone cubic interpolation. Smooth like a spline, but the
- * curve never overshoots the data: no invented highs or lows between
- * samples, plateaus stay flat. On dense series it converges to the
- * polyline. That is the correct tradeoff for financial data.
- */
 function buildChart(points: PricePoint[], width: number) {
   if (points.length < 2 || width <= 0) {
     return {
@@ -65,7 +53,6 @@ function buildChart(points: PricePoint[], width: number) {
   const max = Math.max(...prices);
   const mid = (min + max) / 2;
 
-  // Domain floor: a near-flat series must not fill the full height.
   const domainRange = Math.max(max - min, mid * MIN_DOMAIN_FRACTION);
 
   const innerHeight = CHART_HEIGHT - CHART_PAD_Y * 2;
@@ -85,7 +72,6 @@ function buildChart(points: PricePoint[], width: number) {
   const ys = prices.map(toY);
   const count = points.length;
 
-  // Secant slopes between neighbours, then Steffen-limited tangents.
   const secants: number[] = [];
 
   for (let index = 0; index < count - 1; index++) {
@@ -102,7 +88,6 @@ function buildChart(points: PricePoint[], width: number) {
     const next = secants[index];
 
     if (prev * next <= 0) {
-      // Local extremum in the data — tangent flattens, no overshoot.
       tangents[index] = 0;
       continue;
     }
@@ -135,7 +120,6 @@ function buildChart(points: PricePoint[], width: number) {
   };
 }
 
-/** Sub-cent tokens would render as "$0.00" through formatUsd. */
 function formatPrice(priceUsd: number) {
   if (priceUsd > 0 && priceUsd < 0.01) {
     return `$${priceUsd.toLocaleString("en-US", {
@@ -193,8 +177,6 @@ export function PriceChart({
     [points, chartWidth],
   );
 
-  // Sign comes from the ROUNDED value, so the label and the line color
-  // never disagree with the displayed digits. -0 normalises to +0.
   const displayChange =
     changePercent === null ? null : Number(changePercent.toFixed(2)) + 0;
 

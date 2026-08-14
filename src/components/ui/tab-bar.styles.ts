@@ -34,7 +34,6 @@ export const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
 
-  // flexGrow анимируется (1 → 2 для активной вкладки).
   item: {
     flexGrow: 1,
 
@@ -60,7 +59,6 @@ export const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
   },
 
-  // Подложка активной пилюли; появляется через opacity.
   itemPill: {
     ...StyleSheet.absoluteFillObject,
 

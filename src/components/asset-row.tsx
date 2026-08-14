@@ -9,7 +9,7 @@ import { AppText } from "./ui/text";
 
 type AssetRowProps = {
   asset: PortfolioAsset;
-  /** Изменение цены за сутки; null — данных нет. */
+
   changePercent?: number | null;
   onPress?: () => void;
 };

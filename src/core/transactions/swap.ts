@@ -14,12 +14,7 @@ import {
 
 import { TransactionValidationError } from "./nativeTransfer";
 
-// Своп-намерение фиксирует ОБЕ стороны сделки и маршрут в момент
-// котировки. Всё, что влияет на calldata, живёт здесь — подпись
-// сверяет байты повторной кодировкой, подменить ничего нельзя.
-
 export type SwapAssetRef = {
-  // null — нативный ETH; адрес — контракт ERC-20.
   address: Address | null;
 
   symbol: string;
@@ -38,13 +33,10 @@ export type SwapIntent = {
 
   assetOut: SwapAssetRef;
 
-  // Сырые единицы входного актива.
   amountIn: bigint;
 
-  // Котировка на момент подготовки.
   quotedAmountOut: bigint;
 
-  // Нижняя граница с учётом слиппеджа — зашивается в calldata.
   minAmountOut: bigint;
 
   slippageBps: number;
@@ -57,10 +49,8 @@ export type SwapIntent = {
 export type PreparedSwap = SwapIntent & {
   type: "eip1559";
 
-  // Транзакция идёт на SwapRouter02.
   to: Address;
 
-  // ETH на входе — msg.value; иначе 0.
   value: bigint;
 
   nonce: number;
@@ -73,20 +63,21 @@ export type PreparedSwap = SwapIntent & {
   data: Hex;
 };
 
+export const MAX_SWAP_DEADLINE_MS = 60 * 60 * 1000;
+
 export type SwapValidationContext = {
+  now: number;
+
   expectedChainId: number;
 
   expectedFrom: Address;
 
-  // Деплой Uniswap активной сети — роутер и WETH9 берутся только отсюда.
   deployment: UniswapDeployment;
 };
 
 export type PreparedSwapValidationContext = SwapValidationContext & {
-  // ETH: на msg.value (если вход нативный) плюс комиссия.
   balanceWei: bigint;
 
-  // Для ERC-20 входа: баланс и разрешение роутеру.
   tokenInBalance: bigint;
 
   tokenInAllowance: bigint;
@@ -161,7 +152,6 @@ function normalizeAssetRef(asset: SwapAssetRef, label: string): SwapAssetRef {
   };
 }
 
-// Роутинговый адрес: нативный ETH участвует в пулах как WETH9.
 export function resolveRouteAddress(
   asset: SwapAssetRef,
   deployment: UniswapDeployment,
@@ -214,7 +204,6 @@ export function validateSwapIntent(
 
   const routeOut = resolveRouteAddress(assetOut, context.deployment);
 
-  // ETH↔WETH — это wrap, а не обмен через пул: пула WETH/WETH не бывает.
   if (routeIn.toLowerCase() === routeOut.toLowerCase()) {
     throw new TransactionValidationError(
       "INVALID_DATA",
@@ -254,7 +243,6 @@ export function validateSwapIntent(
     );
   }
 
-  // Слиппедж и minAmountOut обязаны сходиться: floor(quoted·(1−bps)).
   const expectedMin =
     (intent.quotedAmountOut * BigInt(10_000 - intent.slippageBps)) / 10_000n;
 
@@ -269,6 +257,25 @@ export function validateSwapIntent(
 
   if (intent.deadline <= 0n) {
     throw new TransactionValidationError("INVALID_DATA", "Invalid swap deadline");
+  }
+
+  const nowSeconds = BigInt(Math.floor(context.now / 1000));
+
+  if (intent.deadline <= nowSeconds) {
+    throw new TransactionValidationError(
+      "INVALID_DATA",
+      "This swap has already expired",
+    );
+  }
+
+  if (
+    intent.deadline >
+    nowSeconds + BigInt(Math.floor(MAX_SWAP_DEADLINE_MS / 1000))
+  ) {
+    throw new TransactionValidationError(
+      "INVALID_DATA",
+      "This swap would stay valid for far too long",
+    );
   }
 
   return Object.freeze({
@@ -311,7 +318,6 @@ export function validatePreparedSwapForSigning(
 
   const to = isAddress(transaction.to) ? getAddress(transaction.to) : null;
 
-  // Цель — только роутер известного деплоя активной сети.
   if (
     !to ||
     to.toLowerCase() !== context.deployment.swapRouter02.toLowerCase()
@@ -324,8 +330,6 @@ export function validatePreparedSwapForSigning(
 
   const nativeIn = validatedIntent.assetIn.address === null;
 
-  // Integrity: calldata и value обязаны в точности восстанавливаться
-  // из намерения. Любая подмена после подготовки — ошибка.
   const expected = encodeSwapCalldata({
     routeTokenIn: resolveRouteAddress(validatedIntent.assetIn, context.deployment),
 

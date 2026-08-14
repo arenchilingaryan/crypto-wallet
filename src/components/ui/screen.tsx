@@ -13,9 +13,9 @@ import { styles } from "./screen.styles";
 
 type ScreenProps = {
   children: ReactNode;
-  /** Scrollable content with keyboard avoidance — screens with inputs. */
+
   scroll?: boolean;
-  /** Renders a top-left back button. The row stays fixed above scroll content. */
+
   onBack?: () => void;
   style?: ViewStyle;
 };
@@ -50,7 +50,7 @@ export function Screen({
       >
         <ScrollView
           style={styles.flex}
-          contentContainerStyle={[styles.scrollContent, styles.content, style]}
+          contentContainerStyle={[styles.scrollContent, style]}
           keyboardShouldPersistTaps="handled"
         >
           {children}

@@ -27,7 +27,6 @@ export const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
 
-  // Переключатель списков: сегменты в одной пилюле.
   segments: {
     flexDirection: "row",
 
@@ -101,7 +100,6 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
-  // Метрики риска под символом: ликвидность, оборот, возраст пула.
   metrics: {
     flexDirection: "row",
 

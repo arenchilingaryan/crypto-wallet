@@ -3,14 +3,6 @@ import { getAddress, isAddress, zeroAddress, type Address, type Hex } from "viem
 import { encodeErc20Approve } from "./erc20Approve";
 import { TransactionValidationError } from "./nativeTransfer";
 
-/**
- * Отзыв разрешения: approve(spender, 0).
- *
- * Отдельный вид транзакции, а не «approve с нулём»: у approve спендер
- * жёстко пришит к роутеру Uniswap и сумма обязана быть больше нуля.
- * Ослаблять тот гард нельзя — он защищает своп. Здесь наоборот: спендер
- * любой, а сумма обязана быть ровно нулевой.
- */
 export type Erc20RevokeIntent = {
   kind: "erc20-revoke";
 
@@ -179,8 +171,6 @@ export function validatePreparedErc20RevokeForSigning(
     );
   }
 
-  // Integrity: calldata обязана быть ровно approve(spender, 0) —
-  // подменить спендера или вернуть ненулевую сумму после подготовки нельзя.
   const expectedData = encodeErc20Approve(validatedIntent.spender, 0n);
 
   if (transaction.data.toLowerCase() !== expectedData.toLowerCase()) {

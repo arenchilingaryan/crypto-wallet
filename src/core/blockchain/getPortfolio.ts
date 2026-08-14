@@ -1,3 +1,5 @@
+import { getDataApiKey } from "@/core/config/runtimeConfig";
+
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { formatUnits, type Address } from "viem";
@@ -13,7 +15,6 @@ export type PortfolioAsset = {
 
   balance: string;
 
-  /** Знаки после запятой у токена — нужны, чтобы читать сырые суммы. */
   decimals: number;
 
   priceUsd: number | null;
@@ -30,8 +31,6 @@ export type Portfolio = {
 
   networkId: string;
 
-  totalUsd: number;
-
   assets: PortfolioAsset[];
 };
 
@@ -44,8 +43,6 @@ type AlchemyToken = {
 
   tokenBalance: string;
 
-  // Alchemy отдаёт null-поля для токенов без верифицированных метаданных —
-  // на тестнетах это обычное дело.
   tokenMetadata?: {
     decimals?: number | null;
 
@@ -87,7 +84,28 @@ type AlchemyBalanceResponse = {
   };
 };
 
-const API_KEY = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
+export function normalizeTokenBalance(
+  raw: string,
+  decimals: number | null | undefined,
+): { balance: string; decimals: number; decimalsKnown: boolean } {
+  const decimalsKnown = typeof decimals === "number";
+
+  const resolvedDecimals = decimalsKnown ? decimals : 18;
+
+  if (!/^0x/i.test(raw)) {
+    return { balance: raw, decimals: resolvedDecimals, decimalsKnown };
+  }
+
+  try {
+    return {
+      balance: formatUnits(BigInt(raw), resolvedDecimals),
+      decimals: resolvedDecimals,
+      decimalsKnown,
+    };
+  } catch {
+    return { balance: "0", decimals: resolvedDecimals, decimalsKnown };
+  }
+}
 
 function getUsdPrice(token: AlchemyToken | undefined) {
   const price =
@@ -103,6 +121,8 @@ function getUsdPrice(token: AlchemyToken | undefined) {
 }
 
 export async function getPortfolio(address: Address): Promise<Portfolio> {
+  const API_KEY = getDataApiKey();
+
   if (!API_KEY) {
     throw new Error("Alchemy API key is missing");
   }
@@ -216,17 +236,16 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
   const erc20Assets = portfolioResult.data.tokens
     .filter((token) => Boolean(token.tokenAddress))
     .map((token): PortfolioAsset => {
-      const decimals = token.tokenMetadata?.decimals;
+      const {
+        balance,
+        decimals: resolvedDecimals,
+        decimalsKnown,
+      } = normalizeTokenBalance(
+        token.tokenBalance,
+        token.tokenMetadata?.decimals,
+      );
 
-      let balance = token.tokenBalance;
-
-      // null-decimals ведут себя как отсутствующие: hex-баланс не
-      // разворачивается, и актив ниже отсеивается фильтром Number(...) > 0.
-      if (balance.startsWith("0x") && typeof decimals === "number") {
-        balance = formatUnits(BigInt(balance), decimals);
-      }
-
-      const priceUsd = getUsdPrice(token);
+      const priceUsd = decimalsKnown ? getUsdPrice(token) : null;
 
       const numericBalance = Number(balance);
 
@@ -244,14 +263,12 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
         balance,
 
-        decimals: decimals ?? 18,
+        decimals: resolvedDecimals,
 
         priceUsd,
 
         valueUsd,
 
-        // Alchemy на тестнете логотипов почти не отдаёт —
-        // добираем из курируемого реестра.
         logo:
           token.tokenMetadata?.logo ??
           (token.tokenAddress?.startsWith("0x")
@@ -271,17 +288,10 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
   const assets = [nativeAsset, ...erc20Assets];
 
-  const totalUsd = assets.reduce(
-    (total, asset) => total + (asset.valueUsd ?? 0),
-    0,
-  );
-
   return {
     network: ACTIVE_NETWORK.name,
 
     networkId: ACTIVE_NETWORK.id,
-
-    totalUsd,
 
     assets,
   };

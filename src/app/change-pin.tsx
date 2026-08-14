@@ -12,6 +12,8 @@ import { ScreenHeader } from "@/components/ui/screen-header";
 
 import { Colors } from "@/constants/theme";
 
+import { describePinFailure } from "@/core/security/pin";
+
 import { securityApi } from "@/platform/react-native/securityApi";
 
 type Step = "loading" | "verify" | "create" | "done";
@@ -29,8 +31,6 @@ export default function ChangePinScreen() {
         return;
       }
 
-      // Кошельки без PIN сразу попадают на создание —
-      // подтверждать им нечего.
       setStep(configured ? "verify" : "create");
     });
 
@@ -55,8 +55,7 @@ export default function ChangePinScreen() {
   if (step === "verify") {
     return (
       <PinView
-        // key ремаунтит PinView между шагами: без него React переиспользует
-        // инстанс, и введённый здесь PIN остаётся в состоянии setup-шага.
+
         key="verify"
         mode="verify"
         onCancel={() => {
@@ -66,13 +65,7 @@ export default function ChangePinScreen() {
           const result = await securityApi.verifyCurrentPin(pin);
 
           if (!result.ok) {
-            if (result.reason === "locked") {
-              return `Too many attempts. Try again in ${Math.ceil(
-                result.retryAfterMs / 1000,
-              )}s.`;
-            }
-
-            return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+            return describePinFailure(result);
           }
 
           setStep("create");
@@ -93,11 +86,11 @@ export default function ChangePinScreen() {
         }}
         onSubmit={async (pin) => {
           try {
-            await securityApi.setupPin(pin);
+            await securityApi.replacePin(pin);
           } catch (setupError) {
             console.error("PIN update failed:", setupError);
 
-            return "Failed to update PIN";
+            return "Failed to update PIN. Your old PIN still works.";
           }
 
           setStep("done");

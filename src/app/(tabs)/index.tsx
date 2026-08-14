@@ -41,8 +41,6 @@ export default function WalletScreen() {
 
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
-  // Суточное изменение догружается отдельно: это отдельный запрос на актив,
-  // и баланс не должен ждать его, чтобы показаться.
   const [change, setChange] = useState<PortfolioChange | null>(null);
 
   useFocusEffect(

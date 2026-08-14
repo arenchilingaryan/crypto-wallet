@@ -1,6 +1,9 @@
 import { Pressable, View } from "react-native";
 
-import type { ActivityItem } from "@/core/blockchain/activity";
+import {
+  presentActivity,
+  type ActivityItem,
+} from "@/core/blockchain/activity";
 
 import { AppText } from "@/components/ui/text";
 
@@ -69,16 +72,8 @@ export function ActivityView({
 
       <View style={styles.list}>
         {items.map((item) => {
-          const sent = item.direction === "sent";
-
-          const counterparty = sent ? item.to : item.from;
-
-          const title =
-            item.assetType === "swap"
-              ? `Swapped ${item.symbol} → ${item.symbolOut ?? "?"}`
-              : item.assetType === "approve"
-                ? `Approved ${item.symbol}`
-                : `${sent ? "Sent" : "Received"} ${item.symbol}`;
+          const { title, counterparty, counterpartyLabel, amountSign, note } =
+            presentActivity(item);
 
           return (
             <Pressable
@@ -91,14 +86,26 @@ export function ActivityView({
               <View style={styles.left}>
                 <AppText variant="bodyStrong">{title}</AppText>
 
-                {item.assetType !== "swap" &&
-                  item.assetType !== "approve" &&
-                  counterparty && (
-                    <AppText variant="caption" tone="muted" mono>
-                      {sent ? "To " : "From "}
-                      {shortenAddress(counterparty)}
-                    </AppText>
-                  )}
+                {item.status !== "confirmed" && (
+                  <AppText
+                    variant="caption"
+                    tone={item.status === "reverted" ? "danger" : "warning"}
+                  >
+                    {item.status === "reverted" ? "Failed" : "Pending"}
+                  </AppText>
+                )}
+
+                {counterparty && counterpartyLabel && (
+                  <AppText variant="caption" tone="muted" mono>
+                    {counterpartyLabel} {shortenAddress(counterparty)}
+                  </AppText>
+                )}
+
+                {note && (
+                  <AppText variant="caption" tone="muted">
+                    {note}
+                  </AppText>
+                )}
 
                 <AppText variant="caption" tone="muted">
                   {formatTime(item.timestamp)}
@@ -113,7 +120,7 @@ export function ActivityView({
                 ) : (
                   <>
                     <AppText variant="bodyStrong" tabular>
-                      {item.assetType === "swap" ? "-" : sent ? "-" : "+"}
+                      {amountSign}
                       {item.amount}
                     </AppText>
 
@@ -122,8 +129,16 @@ export function ActivityView({
                     </AppText>
 
                     {item.assetType === "swap" && item.amountOut && (
-                      <AppText variant="caption" tone="success" tabular>
-                        +{item.amountOut} {item.symbolOut}
+                      <AppText
+                        variant="caption"
+                        tone={item.amountOutIsQuote ? "muted" : "success"}
+                        tabular
+                      >
+                        {item.status === "reverted"
+                          ? `${item.symbolOut} not received`
+                          : item.amountOutIsQuote
+                            ? `~${item.amountOut} ${item.symbolOut} quoted`
+                            : `+${item.amountOut} ${item.symbolOut}`}
                       </AppText>
                     )}
                   </>

@@ -11,7 +11,6 @@ export const styles = StyleSheet.create({
     marginBottom: Spacing.xl,
   },
 
-  // Сводка риска: сколько денег под чужим контролем прямо сейчас.
   summary: {
     backgroundColor: Colors.surface,
 
@@ -62,6 +61,23 @@ export const styles = StyleSheet.create({
     alignItems: "center",
 
     gap: Spacing.md,
+  },
+
+  approvalTitle: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: Spacing.sm,
+  },
+
+  riskBadge: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 1,
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surfaceAlt,
   },
 
   approvalIdentity: {

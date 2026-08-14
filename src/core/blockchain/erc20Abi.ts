@@ -1,6 +1,3 @@
-// Минимальный ABI стандартного ERC-20 — ровно то, что нужно кошельку:
-// transfer для отправки, approve/allowance для свопа через роутер,
-// balanceOf/decimals/symbol/name для чтения состояния.
 export const erc20Abi = [
   {
     type: "function",

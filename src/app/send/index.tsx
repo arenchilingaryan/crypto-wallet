@@ -12,8 +12,6 @@ import { searchAssets } from "@/core/blockchain/searchAssets";
 
 import { walletApi } from "@/platform/react-native/walletApi";
 
-// Выбор актива для отправки: с главного экрана Send ведёт сюда, а отсюда —
-// в готовую форму (native или erc20).
 export default function SendAssetPickerScreen() {
   const router = useRouter();
 
@@ -87,7 +85,6 @@ export default function SendAssetPickerScreen() {
     const timer = setTimeout(() => {
       setLoading(true);
 
-      // Отправлять можно только то, что лежит в кошельке.
       void searchAssets(portfolio, query)
         .then((nextResults) => {
           if (currentRequest !== requestId.current) {

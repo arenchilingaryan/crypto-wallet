@@ -8,9 +8,13 @@ import {
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
-import type { ActivityItem } from "./activity";
+import { getDataApiKey } from "@/core/config/runtimeConfig";
 
-const API_KEY = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
+import {
+  resolveDirection,
+  type ActivityItem,
+  type ActivityOrigin,
+} from "./activity";
 
 type AlchemyTransfer = {
   uniqueId: string;
@@ -101,7 +105,7 @@ function formatTransferAmount(transfer: AlchemyTransfer): string {
     try {
       return formatUnits(BigInt(rawValue), decimals);
     } catch {
-      // fallback ниже
+      void 0;
     }
   }
 
@@ -127,6 +131,8 @@ function parseTimestamp(transfer: AlchemyTransfer): number | null {
 async function requestTransfers(
   filter: TransferFilter,
 ): Promise<AlchemyTransfer[]> {
+  const API_KEY = getDataApiKey();
+
   if (!API_KEY) {
     throw new Error("Alchemy API key is missing");
   }
@@ -155,7 +161,7 @@ async function requestTransfers(
 
             ...filter,
 
-            category: ["external", "erc20"],
+            category: ["external", "internal", "erc20"],
 
             excludeZeroValue: true,
 
@@ -198,11 +204,12 @@ function mapTransfer(
 
   const contractAddress = normalizeAddress(transfer.rawContract?.address);
 
-  const wallet = walletAddress.toLowerCase();
-
-  const direction = from.toLowerCase() === wallet ? "sent" : "received";
+  const direction = resolveDirection(from, to, walletAddress);
 
   const assetType = transfer.category === "erc20" ? "erc20" : "native";
+
+  const origin: ActivityOrigin =
+    transfer.category === "external" ? "native-transfer" : "token-log";
 
   let blockNumber: bigint | null = null;
 
@@ -220,6 +227,8 @@ function mapTransfer(
     status: "confirmed",
 
     direction,
+
+    origin,
 
     assetType,
 

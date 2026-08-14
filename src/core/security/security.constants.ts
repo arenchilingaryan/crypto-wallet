@@ -1,6 +1,9 @@
 export const SECURITY_STORAGE_KEYS = {
-  pinSalt: "security.pin.salt.v1",
-  pinHash: "security.pin.hash.v1",
+  pinVerifier: "security.pin.verifier.v2",
+
+  legacyPinSalt: "security.pin.salt.v1",
+  legacyPinHash: "security.pin.hash.v1",
+
   failedAttempts: "security.pin.failed-attempts.v1",
   blockedUntil: "security.pin.blocked-until.v1",
 } as const;

@@ -29,7 +29,6 @@ export function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-/** Компактные деньги для списков: $1.2M, $840K, $12.34. */
 export function formatUsdCompact(value: number): string {
   if (!Number.isFinite(value)) {
     return "—";
@@ -50,7 +49,6 @@ export function formatUsdCompact(value: number): string {
   return formatUsd(value);
 }
 
-/** Цена токена: у копеечных монет значащие цифры важнее двух знаков. */
 export function formatTokenPrice(value: number): string {
   if (!Number.isFinite(value)) {
     return "—";

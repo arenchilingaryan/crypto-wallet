@@ -2,13 +2,33 @@ import type { Hash, TransactionReceipt } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
-import type { TransactionDetails } from "@/core/transactions/transactionDetails";
+import {
+  resolveDetailsAsset,
+  type TransactionDetails,
+} from "@/core/transactions/transactionDetails";
 
 import { ethereumPublicClient } from "./ethereumPublicClient";
+import { executionFromTracked } from "@/core/transactions/transactionDetails";
 import { getTrackedTransaction } from "./trackedTransactionStore";
+
+export type ActivityHint = {
+  symbol?: string;
+
+  amount?: string;
+
+  assetType?: string;
+
+  symbolOut?: string;
+
+  amountOut?: string;
+
+  amountOutIsQuote?: boolean;
+};
+
 
 export async function getTransactionDetails(
   hash: Hash,
+  hint?: ActivityHint,
 ): Promise<TransactionDetails> {
   const tracked = await getTrackedTransaction(hash);
 
@@ -36,7 +56,12 @@ export async function getTransactionDetails(
 
       to: tracked.to,
 
-      valueWei: BigInt(tracked.valueWei),
+      ...resolveDetailsAsset({
+        tracked,
+        hint: hint ?? null,
+        chainValueWei: 0n,
+        nativeSymbol: ACTIVE_NETWORK.nativeSymbol,
+      }),
 
       gasUsed: tracked.gasUsed ? BigInt(tracked.gasUsed) : null,
 
@@ -52,6 +77,9 @@ export async function getTransactionDetails(
       blockNumber: tracked.blockNumber ? BigInt(tracked.blockNumber) : null,
 
       timestamp: tracked.confirmedAt ?? tracked.createdAt,
+
+
+      execution: executionFromTracked(tracked, ACTIVE_NETWORK.nativeSymbol),
     };
   }
 
@@ -106,7 +134,12 @@ export async function getTransactionDetails(
 
     to: transaction.to,
 
-    valueWei: transaction.value,
+    ...resolveDetailsAsset({
+      tracked: tracked ?? null,
+      hint: hint ?? null,
+      chainValueWei: transaction.value,
+      nativeSymbol: ACTIVE_NETWORK.nativeSymbol,
+    }),
 
     gasUsed,
 
@@ -117,5 +150,7 @@ export async function getTransactionDetails(
     blockNumber: receipt?.blockNumber ?? transaction.blockNumber ?? null,
 
     timestamp: timestamp ?? tracked?.createdAt ?? null,
+
+    execution: executionFromTracked(tracked ?? null, ACTIVE_NETWORK.nativeSymbol),
   };
 }

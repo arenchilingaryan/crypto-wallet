@@ -9,7 +9,6 @@ export type Erc20TransferPreview = {
 
   from: string;
 
-  // Человеческий получатель, не контракт.
   to: string;
 
   token: string;

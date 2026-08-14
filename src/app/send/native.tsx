@@ -25,6 +25,12 @@ import {
 } from "@/core/transactions/ethAmountInput";
 import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
 
+import { foldPolicyDecision } from "@/core/security/policyDecision";
+import type { SecurityReview } from "@/core/security/securityReview";
+
+import { policyApi } from "@/platform/react-native/policyApi";
+import { describePinFailure } from "@/core/security/pin";
+
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
 import { trackedTransactionApi } from "@/platform/react-native/trackedTransactionApi";
@@ -60,8 +66,11 @@ export default function SendNativeScreen() {
 
   const [reauthing, setReauthing] = useState(false);
 
-  // null = ещё не знаем; false = PIN не настроен, перед отправкой создаём.
   const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
+
+  const [amountUsd, setAmountUsd] = useState<number | null>(null);
+
+  const [review, setReview] = useState<SecurityReview | null>(null);
 
   const quoteRequestId = useRef(0);
 
@@ -71,6 +80,8 @@ export default function SendNativeScreen() {
 
   useEffect(() => {
     setQuote(null);
+
+    setReview(null);
 
     const recipient = to.trim();
 
@@ -166,6 +177,7 @@ export default function SendNativeScreen() {
     };
   }, [to, amount]);
   const canContinue =
+    review?.decision.decision !== "block" &&
     !loading &&
     !quoteLoading &&
     !inputError &&
@@ -193,6 +205,30 @@ export default function SendNativeScreen() {
     try {
       setLoading(true);
       setError(null);
+
+      const verdict = await policyApi.check({
+        recipient: getAddress(recipient),
+
+        symbol: ACTIVE_NETWORK.nativeSymbol,
+
+        amount,
+      });
+
+      setReview(verdict.review);
+
+      const blocked = foldPolicyDecision(verdict.review.decision, {
+        allow: () => null,
+
+        uncovered: () => null,
+
+        block: (decision) => decision.message,
+      });
+
+      if (blocked !== null) {
+        return;
+      }
+
+      setAmountUsd(verdict.amountUsd);
 
       const prepared = await transactionApi.prepareNativeTransfer({
         to: getAddress(recipient),
@@ -234,23 +270,24 @@ export default function SendNativeScreen() {
 
     let authorization: string;
 
+    let reservationId: string | null = null;
+
     try {
       const result = await securityApi.reauthorizeTransaction(
         pin,
         transaction,
+        { amountUsd },
       );
 
       if (!result.ok) {
-        if (result.reason === "locked") {
-          return `Too many attempts. Try again in ${Math.ceil(
-            result.retryAfterMs / 1000,
-          )}s.`;
-        }
-
-        return `Wrong PIN. ${result.attemptsLeft} attempts left.`;
+        return result.reason === "outflow-reserved"
+          ? result.message
+          : describePinFailure(result);
       }
 
       authorization = result.authorization;
+
+      reservationId = result.reservationId;
     } catch (authorizationError) {
       console.error("Transaction authorization failed:", authorizationError);
 
@@ -273,7 +310,17 @@ export default function SendNativeScreen() {
 
       setTransactionHash(hash);
 
-      await trackedTransactionApi.trackNativeTransfer(transaction, hash);
+      await trackedTransactionApi.trackNativeTransfer(transaction, hash, amountUsd);
+
+      await securityApi.releaseOutflow(reservationId);
+
+      if (amountUsd === null) {
+        void trackedTransactionApi.backfillValueUsd(
+          hash,
+          ACTIVE_NETWORK.nativeSymbol,
+          amount,
+        );
+      }
 
       setSendStatus("pending");
       try {
@@ -291,6 +338,8 @@ export default function SendNativeScreen() {
       return null;
     } catch (submissionError) {
       console.error("Transaction submission failed:", submissionError);
+
+      await securityApi.releaseOutflow(reservationId);
 
       setSendStatus(null);
 
@@ -316,12 +365,10 @@ export default function SendNativeScreen() {
       );
     }
 
-    // Кошельки, созданные до PIN-фичи: перед первой отправкой создаём PIN
-    // и тем же вводом авторизуем транзакцию.
     if (!pinConfigured) {
       return (
         <PinView
-          // key: см. change-pin — setup и reauth не должны делить инстанс.
+
           key="send-setup"
           mode="setup"
           onCancel={() => {
@@ -365,6 +412,7 @@ export default function SendNativeScreen() {
     return (
       <SendPreviewView
         preview={preview}
+        review={review}
         onBack={() => {
           setTransaction(null);
           setTransactionHash(null);
@@ -382,6 +430,7 @@ export default function SendNativeScreen() {
     <SendNativeView
       to={to}
       amount={amount}
+      review={review}
       error={inputError ?? error}
       loading={loading}
       quoteLoading={quoteLoading}

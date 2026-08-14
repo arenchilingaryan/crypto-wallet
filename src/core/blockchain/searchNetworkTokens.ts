@@ -71,7 +71,6 @@ export async function searchNetworkTokens(
       strict: false,
     })
   ) {
-    // Известный токен резолвим локально — без сетевого запроса.
     const known = findKnownTokenByAddress(ACTIVE_NETWORK.id, getAddress(query));
 
     if (known) {
@@ -103,8 +102,6 @@ export async function searchNetworkTokens(
     ];
   }
 
-  // Текст: сначала курируемый реестр сети (на тестнете это единственный
-  // источник имён), затем — GeckoTerminal, если сеть им индексируется.
   const knownMatches = searchKnownTokensByText(ACTIVE_NETWORK.id, query).map(
     mapKnownToken,
   );

@@ -1,11 +1,13 @@
 import { useState } from "react";
 
-import { Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
 
 import { PinDots } from "@/components/security/pin-dots";
 import { PinKeypad } from "@/components/security/pin-keypad";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
+
+import { Colors } from "@/constants/theme";
 
 import { styles } from "./pin-view.styles";
 
@@ -39,6 +41,8 @@ export function PinView({ mode, onSubmit, onCancel }: PinViewProps) {
       setLoading(true);
       setError(null);
 
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
       const result = await onSubmit(value);
 
       if (!result) {
@@ -54,6 +58,18 @@ export function PinView({ mode, onSubmit, onCancel }: PinViewProps) {
       }
 
       setPin("");
+    } catch (submitError) {
+      console.error("PIN submission failed:", submitError);
+
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Could not check the PIN. Restore this wallet from its recovery phrase.",
+      );
+
+      setPin("");
+
+      setConfirmation("");
     } finally {
       setLoading(false);
     }
@@ -154,6 +170,15 @@ export function PinView({ mode, onSubmit, onCancel }: PinViewProps) {
           ? "Enter current PIN"
           : "Wallet locked";
 
+  const busyLabel =
+    mode === "setup"
+      ? "Saving your PIN…"
+      : mode === "reauth"
+        ? "Authorizing…"
+        : mode === "verify"
+          ? "Checking your PIN…"
+          : "Unlocking your wallet…";
+
   const description =
     mode === "setup"
       ? "Create a 6-digit PIN to protect access to your wallet."
@@ -219,10 +244,20 @@ export function PinView({ mode, onSubmit, onCancel }: PinViewProps) {
           )}
 
           <View style={styles.errorContainer}>
-            {error && (
-              <AppText variant="caption" tone="danger" style={styles.error}>
-                {error}
-              </AppText>
+            {loading ? (
+              <View style={styles.busy}>
+                <ActivityIndicator color={Colors.textSecondary} />
+
+                <AppText variant="caption" tone="muted">
+                  {busyLabel}
+                </AppText>
+              </View>
+            ) : (
+              error && (
+                <AppText variant="caption" tone="danger" style={styles.error}>
+                  {error}
+                </AppText>
+              )
             )}
           </View>
         </View>

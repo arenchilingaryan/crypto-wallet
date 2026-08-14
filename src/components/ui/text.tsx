@@ -31,9 +31,9 @@ const toneColor: Record<Tone, string> = {
 export type AppTextProps = TextProps & {
   variant?: TypeVariant;
   tone?: Tone;
-  /** Monospace — addresses, seed words, raw values. */
+
   mono?: boolean;
-  /** Tabular figures — anything numeric that may reflow. */
+
   tabular?: boolean;
 };
 

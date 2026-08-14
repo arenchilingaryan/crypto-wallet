@@ -14,7 +14,6 @@ type QuickActionProps = {
   onPress: () => void;
 };
 
-/** Круглая кнопка действия с подписью — ряд под балансом. */
 export function QuickAction({
   label,
   icon,

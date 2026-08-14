@@ -42,7 +42,6 @@ export const styles = StyleSheet.create({
 
     borderRadius: Radius.full,
 
-    // Кнопка выбора не отдаёт своё место колонке суммы.
     flexShrink: 0,
   },
 
@@ -54,9 +53,6 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
-  // Колонка суммы занимает остаток ряда и не выпускает ввод за свои
-  // границы — иначе на web прозрачный TextInput наезжает на селектор
-  // токена и перехватывает клики.
   amount: {
     flex: 1,
 
@@ -67,8 +63,6 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
-  // Ввод суммы визуально совпадает с текстовым вариантом (title/paper).
-  // Гашение веб-аутлайна — тот же приём, что в ui/input.styles.
   amountInput: {
     ...TypeScale.title,
 
@@ -91,7 +85,6 @@ export const styles = StyleSheet.create({
     marginTop: Spacing.md,
   },
 
-  // Кнопка-переворот между картами; слегка наезжает на обе.
   flipRow: {
     alignItems: "center",
 

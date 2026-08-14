@@ -47,6 +47,12 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  busy: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+
   error: {
     textAlign: "center",
   },

@@ -8,7 +8,10 @@ import { VerifyView } from "@/components/screens/verify-view";
 import { WalletsView } from "@/components/screens/wallets-view";
 import { Screen } from "@/components/ui/screen";
 import { Colors } from "@/constants/theme";
-import type { WalletRecord } from "@/core/wallet/walletStore";
+import {
+  WalletStorageUnavailableError,
+  type WalletAccount,
+} from "@/core/wallet/walletEngine";
 import { walletApi } from "@/platform/react-native/walletApi";
 
 import type { Address } from "viem";
@@ -20,12 +23,18 @@ type PendingWallet = {
   mnemonic: string;
 };
 
+function describeWalletError(error: unknown, fallback: string) {
+  return error instanceof WalletStorageUnavailableError
+    ? error.message
+    : fallback;
+}
+
 export default function WalletsScreen() {
   const router = useRouter();
 
   const [mode, setMode] = useState<Mode>("list");
 
-  const [wallets, setWallets] = useState<WalletRecord[]>([]);
+  const [wallets, setWallets] = useState<WalletAccount[]>([]);
 
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
 
@@ -58,18 +67,29 @@ export default function WalletsScreen() {
       setLoading(true);
       setError(null);
 
-      const [walletList, activeWallet] = await Promise.all([
+      const [walletList, activeWallet, health] = await Promise.all([
         walletApi.list(),
         walletApi.load(),
+        walletApi.health(),
       ]);
 
       setWallets(walletList);
 
       setActiveWalletId(activeWallet?.id ?? null);
+
+      if (health.status === "degraded") {
+        setError(
+          "Wallet storage could not be read. Wallets shown here may be out of date, and changes are blocked until it works again.",
+        );
+      } else if (health.walletsWithoutSecret.length > 0) {
+        setError(
+          `No recovery phrase is stored for ${health.walletsWithoutSecret.length} of these wallets. They cannot sign anything — restore them from their recovery phrase.`,
+        );
+      }
     } catch (error) {
       console.error("Wallet list loading failed:", error);
 
-      setError("Failed to load wallets");
+      setError(describeWalletError(error, "Failed to load wallets"));
     } finally {
       setLoading(false);
     }
@@ -83,7 +103,7 @@ export default function WalletsScreen() {
     } catch (error) {
       console.error("Wallet switch failed:", error);
 
-      setError("Failed to switch wallet");
+      setError(describeWalletError(error, "Failed to switch wallet"));
     }
   }
 
@@ -91,15 +111,18 @@ export default function WalletsScreen() {
     try {
       setError(null);
 
-      const wallet = await walletApi.generate();
+      const { address, recoveryPhrase } = await walletApi.prepare();
 
-      setPendingWallet(wallet);
+      setPendingWallet({
+        address,
+        mnemonic: recoveryPhrase,
+      });
 
       setMode("generated");
     } catch (error) {
       console.error("Wallet generation failed:", error);
 
-      setError("Failed to create wallet");
+      setError(describeWalletError(error, "Failed to create wallet"));
     }
   }
 
@@ -107,9 +130,7 @@ export default function WalletsScreen() {
     try {
       setImportError(null);
 
-      const wallet = walletApi.import(importMnemonic);
-
-      await walletApi.persist(wallet.mnemonic);
+      await walletApi.importFromMnemonic(importMnemonic);
 
       setImportMnemonic("");
 
@@ -117,7 +138,7 @@ export default function WalletsScreen() {
     } catch (error) {
       console.error("Wallet import failed:", error);
 
-      setImportError("Invalid recovery phrase");
+      setImportError(describeWalletError(error, "Invalid recovery phrase"));
     }
   }
 
@@ -160,14 +181,24 @@ export default function WalletsScreen() {
       return;
     }
 
-    await walletApi.persist(pendingWallet.mnemonic);
+    try {
+      await walletApi.create(pendingWallet.mnemonic);
+    } catch (error) {
+      console.error("Wallet creation failed:", error);
+
+      setConfirmationError(
+        describeWalletError(error, "Could not save the wallet. Try again."),
+      );
+
+      return;
+    }
 
     setPendingWallet(null);
 
     router.back();
   }
 
-  function handleRemove(wallet: WalletRecord) {
+  function handleRemove(wallet: WalletAccount) {
     Alert.alert(
       "Remove wallet",
       `Remove ${wallet.name} from this device? Make sure you have saved its recovery phrase.`,
@@ -205,7 +236,7 @@ export default function WalletsScreen() {
     } catch (error) {
       console.error("Wallet removal failed:", error);
 
-      setError("Failed to remove wallet");
+      setError(describeWalletError(error, "Failed to remove wallet"));
     }
   }
 

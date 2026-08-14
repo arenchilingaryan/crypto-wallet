@@ -1,3 +1,4 @@
+import { getDataApiKey } from "@/core/config/runtimeConfig";
 import { isTestnetNetwork } from "@/constants/networks";
 import type { Address } from "viem";
 
@@ -8,7 +9,7 @@ export type AssetMarketPoint = {
 
 export type AssetMarketData = {
   priceUsd: number;
-  /** Percent change over the requested range, first point → last point. */
+
   changePercent: number | null;
   points: AssetMarketPoint[];
 };
@@ -32,8 +33,6 @@ type AlchemyHistoricalPriceResponse = {
   }[];
 };
 
-// Alchemy historical prices supports exactly three intervals:
-// '5m', '1h', '1d'. Anything else is a 400.
 function getRangeConfig(range: MarketRange) {
   switch (range) {
     case "1H":
@@ -51,8 +50,6 @@ function getRangeConfig(range: MarketRange) {
 
 export type MarketRange = "1H" | "1D" | "1W" | "1M" | "1Y";
 
-const API_KEY = process.env.EXPO_PUBLIC_ALCHEMY_API_KEY;
-
 export async function getAssetMarketData({
   network,
   type,
@@ -60,11 +57,12 @@ export async function getAssetMarketData({
   contractAddress,
   range,
 }: GetAssetMarketDataInput): Promise<AssetMarketData | null> {
+  const API_KEY = getDataApiKey();
+
   if (!API_KEY) {
     throw new Error("Alchemy API key is missing");
   }
 
-  // Testnet token ≠ asset with a real USD market value.
   if (isTestnetNetwork(network)) {
     return null;
   }

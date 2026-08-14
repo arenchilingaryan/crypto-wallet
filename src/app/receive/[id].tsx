@@ -114,7 +114,6 @@ export default function ReceiveScreen() {
 
     const contractAddress = getAddress(assetId);
 
-    // Известный токен резолвим из реестра — без сетевого запроса.
     const metadata =
       findKnownTokenByAddress(ACTIVE_NETWORK.id, contractAddress) ??
       (await getTokenMetadata(contractAddress));

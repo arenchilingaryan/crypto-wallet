@@ -16,9 +16,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     minHeight: 48,
-    // The border below is the focus indicator; drop the UA focus ring on web.
-    // Chrome's default ring is `outline-style: auto`, which ignores width —
-    // only an explicit non-auto style with zero width removes it.
+
     ...Platform.select({
       web: { outlineStyle: "solid" as const, outlineWidth: 0 },
     }),

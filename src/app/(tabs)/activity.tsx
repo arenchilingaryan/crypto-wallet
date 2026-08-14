@@ -83,6 +83,18 @@ export default function ActivityScreen() {
 
           params: {
             hash: item.hash,
+
+            symbol: item.symbol,
+
+            amount: item.amount,
+
+            assetType: item.assetType,
+
+            symbolOut: item.symbolOut ?? "",
+
+            amountOut: item.amountOut ?? "",
+
+            amountOutIsQuote: item.amountOutIsQuote ? "1" : "",
           },
         });
       }}
