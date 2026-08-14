@@ -6,6 +6,8 @@ import {
   analyzeExecution,
   type ExecutionAnalysis,
 } from "./analyzeExecution";
+import { buildExecutionStory, type StoryStep } from "./executionStory";
+import type { TrackedTransactionStatus } from "./trackedTransaction";
 import { toDecimal } from "./executionFacts";
 
 export type TransactionDetailsStatus =
@@ -13,7 +15,8 @@ export type TransactionDetailsStatus =
   | "broadcast-unknown"
   | "pending"
   | "confirmed"
-  | "reverted";
+  | "reverted"
+  | "superseded";
 
 export type TransactionDetails = {
   hash: Hash;
@@ -51,6 +54,8 @@ export type TransactionDetails = {
   timestamp: number | null;
 
   execution: ExecutionAnalysis | null;
+
+  story: StoryStep[];
 };
 
 export function executionFromTracked(
@@ -64,9 +69,13 @@ export function executionFromTracked(
     minAmountOutWei?: string | null;
     actualAmountOutWei?: string | null;
     tokenOutDecimals?: number;
+    status: TrackedTransactionStatus;
     gasUsed: string | null;
+    gasLimit?: string | null;
+    routeLabel?: string | null;
     effectiveGasPriceWei: string | null;
     createdAt: number;
+    quotedAt?: number | null;
     confirmedAt: number | null;
   } | null,
   nativeSymbol: string,
@@ -75,14 +84,24 @@ export function executionFromTracked(
     return null;
   }
 
+  if (tracked.status !== "confirmed" && tracked.status !== "reverted") {
+    return null;
+  }
+
+  const amountIn = toDecimal(tracked.valueWei, tracked.tokenDecimals ?? 18);
+
+  if (amountIn === null || !tracked.symbolOut) {
+    return null;
+  }
+
   const decimalsOut = tracked.tokenOutDecimals ?? 18;
 
   return analyzeExecution({
-    amountIn: toDecimal(tracked.valueWei, tracked.tokenDecimals ?? 18) ?? "0",
+    amountIn,
 
     symbolIn: tracked.symbol,
 
-    symbolOut: tracked.symbolOut ?? "?",
+    symbolOut: tracked.symbolOut,
 
     quotedAmountOut: toDecimal(tracked.valueOutWei ?? null, decimalsOut),
 
@@ -92,11 +111,15 @@ export function executionFromTracked(
 
     gasUsed: tracked.gasUsed,
 
+    gasLimit: tracked.gasLimit ?? null,
+
+    route: tracked.routeLabel ?? null,
+
     effectiveGasPriceWei: tracked.effectiveGasPriceWei,
 
     nativeSymbol,
 
-    quotedAt: tracked.createdAt,
+    quotedAt: tracked.quotedAt ?? tracked.createdAt,
 
     confirmedAt: tracked.confirmedAt,
   });

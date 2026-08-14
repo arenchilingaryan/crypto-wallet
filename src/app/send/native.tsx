@@ -341,7 +341,7 @@ export default function SendNativeScreen() {
           throw broadcastError;
         });
 
-      await trackedTransactionApi.markBroadcastResult(hash, "pending");
+      await trackedTransactionApi.markBroadcastResult(expectedHash, "pending");
 
       if (amountUsd === null) {
         void trackedTransactionApi.backfillValueUsd(

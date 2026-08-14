@@ -117,6 +117,8 @@ export type SwapQuote = {
   hasSufficientBalance: boolean;
 
   hasSufficientEthForFee: boolean;
+
+  quotedAt: number;
 };
 
 function requireDeployment() {
@@ -524,6 +526,8 @@ export const transactionApi = {
       : maximumNetworkFeeWei <= ethBalanceWei;
 
     return {
+      quotedAt: Date.now(),
+
       route: best.route,
 
       quotedAmountOut: best.amountOut,

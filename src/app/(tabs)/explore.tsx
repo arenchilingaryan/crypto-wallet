@@ -76,7 +76,12 @@ export default function ExploreScreen() {
       error={error}
       onChangeList={setList}
       onSearch={() => {
-        router.push("/search");
+        router.push({
+          pathname: "/search",
+          params: {
+            origin: "explore",
+          },
+        });
       }}
       onSelect={(market) => {
         router.push({
@@ -84,6 +89,7 @@ export default function ExploreScreen() {
 
           params: {
             id: market.address,
+            origin: "explore",
           },
         });
       }}

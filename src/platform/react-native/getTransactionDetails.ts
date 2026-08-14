@@ -9,6 +9,18 @@ import {
 
 import { ethereumPublicClient } from "./ethereumPublicClient";
 import { executionFromTracked } from "@/core/transactions/transactionDetails";
+import {
+  buildExecutionStory,
+  type StoryKind,
+} from "@/core/transactions/executionStory";
+
+function storyKind(assetType: string): StoryKind {
+  if (assetType === "swap") {
+    return "swap";
+  }
+
+  return assetType === "approve" ? "approve" : "transfer";
+}
 import { getTrackedTransaction } from "./trackedTransactionStore";
 
 export type ActivityHint = {
@@ -80,6 +92,16 @@ export async function getTransactionDetails(
 
 
       execution: executionFromTracked(tracked, ACTIVE_NETWORK.nativeSymbol),
+
+      story: buildExecutionStory({
+        kind: storyKind(tracked.assetType),
+        status: tracked.status,
+        quotedAt: tracked.quotedAt ?? tracked.createdAt,
+        broadcastAt: tracked.broadcastAt ?? null,
+        confirmedAt: tracked.confirmedAt,
+        blockNumber: tracked.blockNumber,
+        hash,
+      }),
     };
   }
 
@@ -152,5 +174,17 @@ export async function getTransactionDetails(
     timestamp: timestamp ?? tracked?.createdAt ?? null,
 
     execution: executionFromTracked(tracked ?? null, ACTIVE_NETWORK.nativeSymbol),
+
+    story: tracked
+      ? buildExecutionStory({
+          kind: storyKind(tracked.assetType),
+          status: receipt === null ? tracked.status : status,
+          quotedAt: tracked.quotedAt ?? tracked.createdAt,
+          broadcastAt: tracked.broadcastAt ?? null,
+          confirmedAt: timestamp ?? tracked.confirmedAt,
+          blockNumber: receipt?.blockNumber?.toString() ?? tracked.blockNumber,
+          hash,
+        })
+      : [],
   };
 }

@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { Pressable, View } from "react-native";
 
 import { AssetIcon } from "@/components/asset-icon";
+import { TokenIntelligenceView } from "@/components/token-intelligence";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
 
@@ -10,6 +11,7 @@ import type {
   MarketRange,
 } from "@/core/blockchain/getAssetMarketData";
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
+import type { TokenIntelligence } from "@/core/token-intelligence/types";
 
 import { formatTokenAmount, formatUsd } from "@/utils/format";
 
@@ -21,8 +23,11 @@ type AssetViewProps = {
   marketData: AssetMarketData | null;
   range: MarketRange;
   marketPending: boolean;
+  intelligence: TokenIntelligence | null;
   onChangeRange: (range: MarketRange) => void;
+  onRetryIntelligence: () => void;
   onReceive: () => void;
+  onSwap: () => void;
   onBack: () => void;
 };
 
@@ -31,8 +36,11 @@ export function AssetView({
   marketData,
   range,
   marketPending,
+  intelligence,
   onChangeRange,
+  onRetryIntelligence,
   onReceive,
+  onSwap,
   onBack,
 }: AssetViewProps) {
   const currentPriceUsd = asset.priceUsd ?? marketData?.priceUsd ?? null;
@@ -56,7 +64,7 @@ export function AssetView({
       : null;
 
   return (
-    <Screen onBack={onBack}>
+    <Screen scroll onBack={onBack}>
       <View style={styles.assetHeader}>
         <AssetIcon
           type={asset.type}
@@ -120,21 +128,7 @@ export function AssetView({
 
         <ActionButton
           label="Swap"
-          onPress={() => {
-            const assetId =
-              asset.type === "native" ? "native" : asset.contractAddress;
-
-            if (!assetId) {
-              return;
-            }
-
-            router.push({
-              pathname: "/swap",
-              params: {
-                from: assetId,
-              },
-            });
-          }}
+          onPress={onSwap}
         />
       </View>
 
@@ -177,6 +171,15 @@ export function AssetView({
           </>
         )}
       </View>
+
+      {asset.type === "erc20" && intelligence ? (
+        <View style={styles.intelligence}>
+          <TokenIntelligenceView
+            intelligence={intelligence}
+            onRetry={onRetryIntelligence}
+          />
+        </View>
+      ) : null}
     </Screen>
   );
 }
@@ -190,6 +193,9 @@ type ActionButtonProps = {
 function ActionButton({ label, disabled = false, onPress }: ActionButtonProps) {
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [

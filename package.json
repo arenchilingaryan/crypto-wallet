@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:core": "node scripts/run-core-in-node.cjs"
+    "test:core": "node scripts/run-core-in-node.cjs && node scripts/run-token-intelligence-in-node.cjs",
+    "test:token-intelligence": "node scripts/run-token-intelligence-in-node.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

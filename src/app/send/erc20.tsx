@@ -434,7 +434,7 @@ export default function SendErc20Screen() {
           throw broadcastError;
         });
 
-      await trackedTransactionApi.markBroadcastResult(hash, "pending");
+      await trackedTransactionApi.markBroadcastResult(expectedHash, "pending");
 
       if (amountUsd === null && token) {
         void trackedTransactionApi.backfillValueUsd(hash, token.symbol, amount);

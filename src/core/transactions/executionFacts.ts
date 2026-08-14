@@ -78,6 +78,10 @@ export type ExecutionFacts = {
 
   gasUsed: string | null;
 
+  gasLimit: string | null;
+
+  route: string | null;
+
   effectiveGasPriceWei: string | null;
 
   nativeSymbol: string;

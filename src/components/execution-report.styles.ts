@@ -25,6 +25,21 @@ export const styles = StyleSheet.create({
     marginVertical: Spacing.xs,
   },
 
+  step: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+
+  mark: {
+    width: 16,
+    paddingTop: 1,
+  },
+
+  stepText: {
+    flex: 1,
+    gap: 2,
+  },
+
   value: {
     textAlign: "right",
     flexShrink: 1,

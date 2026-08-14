@@ -14,6 +14,11 @@ import {
 } from "@/core/blockchain/getPortfolio";
 import { getTokenMetadata } from "@/core/blockchain/getTokenMetadata";
 import { findKnownTokenByAddress } from "@/core/blockchain/knownTokens";
+import type { TokenIntelligence } from "@/core/token-intelligence/types";
+import {
+  createUnavailableTokenIntelligence,
+  loadTokenIntelligence,
+} from "@/platform/react-native/token-intelligence";
 import { walletApi } from "@/platform/react-native/walletApi";
 
 import {
@@ -23,8 +28,9 @@ import {
 } from "@/core/blockchain/getAssetMarketData";
 
 export default function AssetScreen() {
-  const { id } = useLocalSearchParams<{
+  const { id, origin } = useLocalSearchParams<{
     id?: string;
+    origin?: string;
   }>();
 
   const [asset, setAsset] = useState<PortfolioAsset | null>(null);
@@ -35,10 +41,18 @@ export default function AssetScreen() {
   const [range, setRange] = useState<MarketRange>("1D");
   const [marketPending, setMarketPending] = useState(false);
   const [networkId, setNetworkId] = useState<string | null>(null);
+  const [intelligence, setIntelligence] =
+    useState<TokenIntelligence | null>(null);
+  const [intelligenceRequestNonce, setIntelligenceRequestNonce] = useState(0);
 
   const marketRequestId = useRef(0);
+  const forceIntelligenceRefresh = useRef(false);
 
   const loadedRange = useRef<MarketRange | null>(null);
+
+  const loadAssetRef = useRef(loadAsset);
+
+  loadAssetRef.current = loadAsset;
 
   const router = useRouter();
 
@@ -49,13 +63,73 @@ export default function AssetScreen() {
       return;
     }
 
-    void loadAsset(id);
+    void loadAssetRef.current(id);
   }, [id]);
+
+  const intelligenceAddress =
+    asset?.type === "erc20" ? asset.contractAddress : null;
+  const intelligenceSymbol = asset?.symbol;
+  const intelligenceName = asset?.name;
+
+  useEffect(() => {
+    if (!intelligenceAddress) {
+      setIntelligence(null);
+      return;
+    }
+
+    let active = true;
+    const forceRefresh = forceIntelligenceRefresh.current;
+    const token = {
+      chainId: ACTIVE_NETWORK.chain.id,
+      address: intelligenceAddress,
+      symbol: intelligenceSymbol ?? "unknown",
+      name: intelligenceName ?? "unknown",
+    } as const;
+
+    forceIntelligenceRefresh.current = false;
+
+    void loadTokenIntelligence({
+      token,
+      forceRefresh,
+      onUpdate: ({ intelligence: nextIntelligence }) => {
+        if (active) {
+          setIntelligence(nextIntelligence);
+        }
+      },
+    })
+      .then(({ intelligence: nextIntelligence }) => {
+        if (active) {
+          setIntelligence(nextIntelligence);
+        }
+      })
+      .catch((intelligenceError) => {
+        if (active) {
+          console.error("Token intelligence loading failed:", intelligenceError);
+          setIntelligence(
+            createUnavailableTokenIntelligence(
+              token,
+              "Token intelligence could not be loaded",
+            ),
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    intelligenceAddress,
+    intelligenceName,
+    intelligenceRequestNonce,
+    intelligenceSymbol,
+  ]);
 
   async function loadAsset(assetId: string) {
     try {
       setLoading(true);
       setError(null);
+      setAsset(null);
+      setMarketData(null);
 
       const wallet = await walletApi.load();
 
@@ -119,6 +193,7 @@ export default function AssetScreen() {
 
       setAsset(foundAsset);
       setNetworkId(portfolio.networkId);
+      setLoading(false);
 
       try {
         const requestId = ++marketRequestId.current;
@@ -261,7 +336,12 @@ export default function AssetScreen() {
         marketData={marketData}
         range={range}
         marketPending={marketPending}
+        intelligence={intelligence}
         onChangeRange={handleChangeRange}
+        onRetryIntelligence={() => {
+          forceIntelligenceRefresh.current = true;
+          setIntelligenceRequestNonce((nonce) => nonce + 1);
+        }}
         onReceive={() => {
           if (!id) {
             return;
@@ -272,6 +352,22 @@ export default function AssetScreen() {
             params: {
               id,
             },
+          });
+        }}
+        onSwap={() => {
+          const assetId =
+            asset.type === "native" ? "native" : asset.contractAddress;
+
+          if (!assetId) {
+            return;
+          }
+
+          router.push({
+            pathname: "/swap",
+            params:
+              origin === "explore" && asset.type === "erc20"
+                ? { to: assetId }
+                : { from: assetId },
           });
         }}
         onBack={() => {

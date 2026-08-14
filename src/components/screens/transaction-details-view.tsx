@@ -2,7 +2,10 @@ import { Pressable, View } from "react-native";
 
 import { formatEther } from "viem";
 
-import { ExecutionReport } from "@/components/execution-report";
+import {
+  ExecutionReport,
+  ExecutionStory,
+} from "@/components/execution-report";
 import { BackIcon } from "@/components/icons/back-icon";
 import { Screen } from "@/components/ui/screen";
 import { AppText } from "@/components/ui/text";
@@ -130,7 +133,12 @@ export function TransactionDetailsView({
 
         <DetailRow label="To" value={transaction.to ?? "—"} mono selectable />
 
-        <DetailRow label="Network fee" value={fee ? `${fee} ETH` : "Pending"} />
+        {!transaction.execution && (
+          <DetailRow
+            label="Network fee"
+            value={fee ? `${fee} ETH` : "Pending"}
+          />
+        )}
 
         <DetailRow
           label="Block"
@@ -150,6 +158,11 @@ export function TransactionDetailsView({
           selectable
         />
       </View>
+
+      {transaction.story.length > 0 && (
+        <ExecutionStory steps={transaction.story} />
+      )}
+
 
       {transaction.execution && (
         <ExecutionReport execution={transaction.execution} />

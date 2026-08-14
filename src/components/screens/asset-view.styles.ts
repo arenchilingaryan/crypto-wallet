@@ -106,4 +106,8 @@ export const styles = StyleSheet.create({
   contract: {
     gap: Spacing.sm,
   },
+
+  intelligence: {
+    marginTop: Spacing.xxl,
+  },
 });

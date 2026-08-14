@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { router, useLocalSearchParams } from "expo-router";
 
-import { formatUnits, getAddress, isAddress, type Hash } from "viem";
+import {
+  formatUnits,
+  getAddress,
+  isAddress,
+  keccak256,
+  type Hash,
+} from "viem";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 import { PinView } from "@/components/screens/pin-view";
@@ -12,12 +18,14 @@ import {
 } from "@/components/screens/send-status-view";
 import { SwapPreviewView } from "@/components/screens/swap-preview-view";
 import { SwapView, type SwapSide } from "@/components/screens/swap-view";
+import { TokenTradeBriefingView } from "@/components/token-intelligence";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { getUniswapDeployment } from "@/core/blockchain/uniswap";
 import { foldPolicyDecision } from "@/core/security/policyDecision";
 import type { SecurityReview } from "@/core/security/securityReview";
+import type { TokenIntelligence } from "@/core/token-intelligence/types";
 
 import { policyApi } from "@/platform/react-native/policyApi";
 
@@ -32,6 +40,13 @@ import {
 import type { PreparedErc20Approve } from "@/core/transactions/erc20Approve";
 import type { PreparedSwap, SwapAssetRef } from "@/core/transactions/swap";
 import {
+  decideTradeGateForAll,
+  describeTradeGate,
+  requiresTradeBriefing,
+  tradeTargets,
+  type BriefedTrade,
+} from "@/core/transactions/tradeGate";
+import {
   normalizeTokenAmountInput,
   parseTokenAmountInput,
 } from "@/core/transactions/tokenAmountInput";
@@ -40,6 +55,12 @@ import { describePinFailure } from "@/core/security/pin";
 
 import { securityApi } from "@/platform/react-native/securityApi";
 import { signerApi } from "@/platform/react-native/signerApi";
+import {
+  createUnavailableTokenIntelligence,
+  isTokenIntelligenceProviderSupported,
+  loadTokenIntelligence,
+  unsupportedProviderReason,
+} from "@/platform/react-native/token-intelligence";
 import { trackedTransactionApi } from "@/platform/react-native/trackedTransactionApi";
 import {
   transactionApi,
@@ -153,7 +174,7 @@ function findPortfolioBalance(
 }
 
 export default function SwapScreen() {
-  const { from } = useLocalSearchParams<{ from?: string }>();
+  const { from, to } = useLocalSearchParams<{ from?: string; to?: string }>();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
 
@@ -172,6 +193,17 @@ export default function SwapScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [review, setReview] = useState<SecurityReview | null>(null);
+
+  const [tradeBriefing, setTradeBriefing] =
+    useState<TokenIntelligence | null>(null);
+
+  const [briefingRefreshing, setBriefingRefreshing] = useState(false);
+
+  const [briefingAsset, setBriefingAsset] = useState<SelectedAsset | null>(
+    null,
+  );
+
+  const [clearedTrades, setClearedTrades] = useState<BriefedTrade[]>([]);
 
   const [loading, setLoading] = useState(false);
 
@@ -200,6 +232,14 @@ export default function SwapScreen() {
   const quoteRequestId = useRef(0);
 
   const pickerRequestId = useRef(0);
+
+  const briefingRequestId = useRef(0);
+
+  const initializedReceiveParam = useRef<string | null>(null);
+
+  const latestPayAsset = useRef(payAsset);
+
+  latestPayAsset.current = payAsset;
 
   useEffect(() => {
     void securityApi.hasPin().then(setPinConfigured);
@@ -236,7 +276,7 @@ export default function SwapScreen() {
   }, []);
 
   useEffect(() => {
-    if (!from) {
+    if (!from || tradeBriefing || loading) {
       return;
     }
 
@@ -265,6 +305,61 @@ export default function SwapScreen() {
       mounted = false;
     };
   }, [from, portfolio]);
+
+  useEffect(() => {
+    if (tradeBriefing || loading) {
+      return;
+    }
+
+    if (!to) {
+      initializedReceiveParam.current = null;
+      return;
+    }
+
+    if (initializedReceiveParam.current === to) {
+      return;
+    }
+
+    let mounted = true;
+
+    void (async () => {
+      try {
+        const selected = await resolveAsset(to, portfolio);
+
+        if (!mounted) {
+          return;
+        }
+
+        if (!selected) {
+          setError("Failed to preselect the receive token");
+          return;
+        }
+
+        initializedReceiveParam.current = to;
+
+        if (sameAsset(latestPayAsset.current.ref, selected.ref)) {
+          setReceiveAsset(null);
+          return;
+        }
+
+        setReceiveAsset(selected);
+        setAmount("");
+        setQuote(null);
+        setInputError(null);
+        setError(null);
+      } catch (receiveAssetError) {
+        console.error("Receive asset preselection failed:", receiveAssetError);
+
+        if (mounted) {
+          setError("Failed to preselect the receive token");
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [portfolio, to]);
 
   useEffect(() => {
     setQuote(null);
@@ -491,6 +586,17 @@ export default function SwapScreen() {
 
   const parsedAmount = parseTokenAmountInput(amount, payAsset.ref.decimals);
 
+  const tradeChecksCoverThisNetwork = isTokenIntelligenceProviderSupported(
+    ACTIVE_NETWORK.chain.id,
+    "honeypot-check",
+  );
+
+  const coverageNotice =
+    tradeChecksCoverThisNetwork ||
+    (payAsset.ref.address === null && receiveAsset?.ref.address == null)
+      ? null
+      : unsupportedProviderReason(ACTIVE_NETWORK.chain.id);
+
   const canSubmit =
     !loading &&
     !quoteLoading &&
@@ -501,8 +607,164 @@ export default function SwapScreen() {
     parsedAmount !== null &&
     receiveAsset !== null;
 
+  function tradeTokenIdentity(asset: SelectedAsset | null) {
+    if (!asset?.ref.address) {
+      return null;
+    }
+
+    return {
+      chainId: ACTIVE_NETWORK.chain.id,
+      address: asset.ref.address,
+      symbol: asset.ref.symbol,
+      name: asset.name,
+    };
+  }
+
+  async function loadTradeIntelligence(
+    asset: SelectedAsset | null,
+    onProgress?: (intelligence: TokenIntelligence) => void,
+  ) {
+    const token = tradeTokenIdentity(asset);
+
+    if (!token) {
+      return null;
+    }
+
+    const { intelligence } = await loadTokenIntelligence({
+      token,
+      refreshTrade: true,
+      onUpdate: ({ intelligence: nextIntelligence }) => {
+        onProgress?.(nextIntelligence);
+      },
+    });
+
+    return intelligence;
+  }
+
+  function unavailableTradeIntelligence(asset: SelectedAsset | null) {
+    const token = tradeTokenIdentity(asset);
+
+    if (!token) {
+      return null;
+    }
+
+    return createUnavailableTokenIntelligence(
+      token,
+      "The pre-trade token check could not be completed",
+    );
+  }
+
   async function handleSubmit() {
     if (!canSubmit || !quote || !receiveAsset || !parsedAmount) {
+      return;
+    }
+
+    const targets = tradeTargets({
+      sold: {
+        chainId: ACTIVE_NETWORK.chain.id,
+        address: payAsset.ref.address,
+      },
+      bought: {
+        chainId: ACTIVE_NETWORK.chain.id,
+        address: receiveAsset.ref.address,
+      },
+    });
+
+    if (targets.length === 0) {
+      await prepareSubmission([]);
+
+      return;
+    }
+
+    await runTradeChecks([]);
+  }
+
+  async function runTradeChecks(alreadyCleared: BriefedTrade[]) {
+    if (!receiveAsset) {
+      return;
+    }
+
+    const cleared = [...alreadyCleared];
+
+    const assetsToCheck = [payAsset, receiveAsset].filter(
+      (asset): asset is SelectedAsset =>
+        asset.ref.address !== null &&
+        !cleared.some(
+          (entry) =>
+            entry.target.address?.toLowerCase() ===
+            asset.ref.address?.toLowerCase(),
+        ),
+    );
+
+    for (const asset of assetsToCheck) {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const intelligence = await loadTradeIntelligence(asset);
+
+        if (intelligence && requiresTradeBriefing(intelligence)) {
+          setBriefingRefreshing(false);
+          setBriefingAsset(asset);
+          setClearedTrades(cleared);
+          setTradeBriefing(intelligence);
+
+          return;
+        }
+
+        cleared.push({
+          target: {
+            chainId: ACTIVE_NETWORK.chain.id,
+            address: asset.ref.address,
+          },
+          acknowledged: true,
+        });
+      } catch (intelligenceError) {
+        console.error(
+          "Pre-trade token intelligence failed:",
+          intelligenceError,
+        );
+
+        const unavailable = unavailableTradeIntelligence(asset);
+
+        if (unavailable) {
+          setBriefingAsset(asset);
+          setClearedTrades(cleared);
+          setTradeBriefing(unavailable);
+        }
+
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    await prepareSubmission(cleared);
+  }
+
+  async function prepareSubmission(cleared: BriefedTrade[]) {
+    if (!canSubmit || !quote || !receiveAsset || !parsedAmount) {
+      return;
+    }
+
+    const gate = decideTradeGateForAll({
+      targets: tradeTargets({
+        sold: {
+          chainId: ACTIVE_NETWORK.chain.id,
+          address: payAsset.ref.address,
+        },
+        bought: {
+          chainId: ACTIVE_NETWORK.chain.id,
+          address: receiveAsset.ref.address,
+        },
+      }),
+
+      cleared,
+    });
+
+    if (!gate.proceed) {
+      setError(describeTradeGate(gate));
+
       return;
     }
 
@@ -672,18 +934,39 @@ export default function SwapScreen() {
 
       setSendStatus("broadcasting");
 
-      const hash = await transactionApi.broadcastSignedTransaction(signed);
-
-      setTransactionHash(hash);
+      const expectedHash = keccak256(signed);
 
       if (submitPhase.kind === "approve") {
         await trackedTransactionApi.trackErc20Approve(
           submitPhase.transaction,
-          hash,
+          expectedHash,
+          "broadcast-pending",
+          signed,
         );
       } else {
-        await trackedTransactionApi.trackSwap(submitPhase.transaction, hash);
+        await trackedTransactionApi.trackSwap(
+          submitPhase.transaction,
+          expectedHash,
+          "broadcast-pending",
+          signed,
+          quote?.quotedAt ?? null,
+        );
       }
+
+      setTransactionHash(expectedHash);
+
+      const hash = await transactionApi
+        .broadcastSignedTransaction(signed)
+        .catch(async (broadcastError: unknown) => {
+          await trackedTransactionApi.markBroadcastResult(
+            expectedHash,
+            "broadcast-unknown",
+          );
+
+          throw broadcastError;
+        });
+
+      await trackedTransactionApi.markBroadcastResult(expectedHash, "pending");
 
       setSendStatus("pending");
 
@@ -741,6 +1024,85 @@ export default function SwapScreen() {
           setPicker(null);
 
           setPickerQuery("");
+        }}
+      />
+    );
+  }
+
+  if (tradeBriefing) {
+    return (
+      <TokenTradeBriefingView
+        intelligence={tradeBriefing}
+        refreshing={briefingRefreshing}
+        onCancel={() => {
+          briefingRequestId.current += 1;
+          setBriefingRefreshing(false);
+          setBriefingAsset(null);
+          setClearedTrades([]);
+          setTradeBriefing(null);
+        }}
+        onContinue={() => {
+          if (briefingRefreshing) {
+            return;
+          }
+
+          const acknowledged: BriefedTrade[] = [
+            ...clearedTrades,
+            {
+              target: {
+                chainId: tradeBriefing.token.chainId,
+                address: tradeBriefing.token.address,
+              },
+              acknowledged: true,
+            },
+          ];
+
+          briefingRequestId.current += 1;
+          setBriefingAsset(null);
+          setClearedTrades([]);
+          setTradeBriefing(null);
+
+          void runTradeChecks(acknowledged);
+        }}
+        onRetry={() => {
+          const requestId = ++briefingRequestId.current;
+
+          const asset = briefingAsset;
+
+          setBriefingRefreshing(true);
+
+          void loadTradeIntelligence(asset, (intelligence) => {
+            if (briefingRequestId.current === requestId) {
+              setTradeBriefing(intelligence);
+            }
+          })
+            .then((intelligence) => {
+              if (
+                intelligence &&
+                briefingRequestId.current === requestId
+              ) {
+                setTradeBriefing(intelligence);
+              }
+            })
+            .catch((intelligenceError) => {
+              console.error(
+                "Pre-trade token intelligence retry failed:",
+                intelligenceError,
+              );
+
+              if (briefingRequestId.current === requestId) {
+                const unavailable = unavailableTradeIntelligence(asset);
+
+                if (unavailable) {
+                  setTradeBriefing(unavailable);
+                }
+              }
+            })
+            .finally(() => {
+              if (briefingRequestId.current === requestId) {
+                setBriefingRefreshing(false);
+              }
+            });
         }}
       />
     );
@@ -889,8 +1251,10 @@ export default function SwapScreen() {
       networkFee={networkFee}
       slippage="0.5%"
       route={route}
+      coverageNotice={coverageNotice}
       error={inputError ?? error}
       quoteLoading={quoteLoading}
+      interactionDisabled={loading}
       submitLabel={loading ? "Preparing…" : submitLabel}
       canSubmit={canSubmit}
       onChangePayAmount={(value) => {

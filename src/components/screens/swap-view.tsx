@@ -43,9 +43,13 @@ type SwapViewProps = {
 
   route?: string;
 
+  coverageNotice?: string | null;
+
   error?: string | null;
 
   quoteLoading?: boolean;
+
+  interactionDisabled?: boolean;
 
   submitLabel?: string;
 
@@ -86,6 +90,8 @@ type TokenCardProps = {
   onChangeAmount?: (value: string) => void;
 
   amountLoading?: boolean;
+
+  disabled?: boolean;
 };
 
 function TokenCard({
@@ -94,6 +100,7 @@ function TokenCard({
   onSelectToken,
   onChangeAmount,
   amountLoading = false,
+  disabled = false,
 }: TokenCardProps) {
   return (
     <View style={styles.card}>
@@ -104,13 +111,15 @@ function TokenCard({
       <View style={styles.cardRow}>
         <Pressable
           onPress={onSelectToken}
-          disabled={!onSelectToken}
+          disabled={disabled || !onSelectToken}
           accessibilityRole="button"
           accessibilityLabel={`Select ${label.toLowerCase()} token`}
           style={({ pressed }) => [
             styles.tokenSelector,
 
-            pressed && onSelectToken ? styles.tokenSelectorPressed : undefined,
+            pressed && onSelectToken && !disabled
+              ? styles.tokenSelectorPressed
+              : undefined,
           ]}
         >
           <AssetIcon
@@ -138,6 +147,7 @@ function TokenCard({
             <TextInput
               value={side.amount}
               onChangeText={onChangeAmount}
+              editable={!disabled}
               placeholder="0"
               placeholderTextColor={Colors.textMuted}
               keyboardType="decimal-pad"
@@ -172,8 +182,10 @@ export function SwapView({
   networkFee = "—",
   slippage = "—",
   route,
+  coverageNotice = null,
   error = null,
   quoteLoading = false,
+  interactionDisabled = false,
   submitLabel = "Swap",
   canSubmit = false,
   onChangePayAmount,
@@ -194,18 +206,21 @@ export function SwapView({
         side={pay}
         onSelectToken={onSelectPayToken}
         onChangeAmount={onChangePayAmount}
+        disabled={interactionDisabled}
       />
 
       <View style={styles.flipRow}>
         <Pressable
           onPress={onFlip}
-          disabled={!onFlip}
+          disabled={interactionDisabled || !onFlip}
           accessibilityRole="button"
           accessibilityLabel="Flip swap direction"
           style={({ pressed }) => [
             styles.flipButton,
 
-            pressed && onFlip ? styles.flipButtonPressed : undefined,
+            pressed && onFlip && !interactionDisabled
+              ? styles.flipButtonPressed
+              : undefined,
           ]}
         >
           <SwapIcon size={18} color={Colors.textPrimary} />
@@ -217,10 +232,17 @@ export function SwapView({
         side={receive}
         onSelectToken={onSelectReceiveToken}
         amountLoading={quoteLoading}
+        disabled={interactionDisabled}
       />
 
       {review && review.decision.decision === "block" && (
         <SecurityBriefing review={review} />
+      )}
+
+      {coverageNotice && (
+        <AppText variant="caption" tone="muted" style={styles.error}>
+          {coverageNotice}
+        </AppText>
       )}
 
       {error && (

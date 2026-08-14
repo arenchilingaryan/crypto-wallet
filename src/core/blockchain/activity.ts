@@ -100,7 +100,8 @@ export type ActivityStatus =
   | "broadcast-unknown"
   | "pending"
   | "confirmed"
-  | "reverted";
+  | "reverted"
+  | "superseded";
 
 export type ActivityOrigin = "wallet-signed" | "native-transfer" | "token-log";
 

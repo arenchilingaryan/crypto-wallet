@@ -14,6 +14,7 @@ import {
 } from "@/core/transactions/trackedTransaction";
 import { creditedFromLogs } from "@/core/transactions/executionFacts";
 import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
+import { describeSwapRoute } from "@/core/transactions/createSwapPreview";
 
 import { walletEngine } from "./compositionRoot";
 
@@ -26,6 +27,16 @@ import {
   saveTrackedTransaction,
   updateTrackedTransaction,
 } from "./trackedTransactionStore";
+
+async function blockTimestamp(blockNumber: bigint): Promise<number> {
+  try {
+    const block = await ethereumPublicClient.getBlock({ blockNumber });
+
+    return Number(block.timestamp) * 1000;
+  } catch {
+    return Date.now();
+  }
+}
 
 export const trackedTransactionApi = {
   async trackNativeTransfer(
@@ -77,6 +88,10 @@ export const trackedTransactionApi = {
       nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
 
       signedRawTx,
+
+      gasLimit: transaction.gas.toString(),
+
+      broadcastAt: null,
 
       createdAt: Date.now(),
 
@@ -150,6 +165,10 @@ export const trackedTransactionApi = {
 
       signedRawTx,
 
+      gasLimit: transaction.gas.toString(),
+
+      broadcastAt: null,
+
       createdAt: Date.now(),
 
       status: initialStatus,
@@ -176,6 +195,8 @@ export const trackedTransactionApi = {
     initialStatus: TrackedTransactionStatus = "pending",
 
     signedRawTx: string | null = null,
+
+    quotedAt: number | null = null,
   ): Promise<TrackedTransaction> {
     const wallet = await walletEngine.getActive();
 
@@ -222,6 +243,10 @@ export const trackedTransactionApi = {
 
       minAmountOutWei: transaction.minAmountOut.toString(),
 
+      routeLabel: describeSwapRoute(transaction),
+
+      quotedAt,
+
       tokenOutDecimals: transaction.assetOut.decimals,
 
       actualAmountOutWei: null,
@@ -229,6 +254,10 @@ export const trackedTransactionApi = {
       nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
 
       signedRawTx,
+
+      gasLimit: transaction.gas.toString(),
+
+      broadcastAt: null,
 
       createdAt: Date.now(),
 
@@ -298,6 +327,10 @@ export const trackedTransactionApi = {
 
       signedRawTx,
 
+      gasLimit: transaction.gas.toString(),
+
+      broadcastAt: null,
+
       createdAt: Date.now(),
 
       status: initialStatus,
@@ -317,7 +350,12 @@ export const trackedTransactionApi = {
   },
 
   async markBroadcastResult(hash: Hash, status: TrackedTransactionStatus) {
-    await updateTrackedTransaction(hash, { status });
+    await updateTrackedTransaction(
+      hash,
+      status === "pending"
+        ? { status, broadcastAt: Date.now() }
+        : { status },
+    );
   },
 
   async resolveUnfinished(transaction: TrackedTransaction) {
@@ -512,7 +550,7 @@ export const trackedTransactionApi = {
 
           signedRawTx: null,
 
-          confirmedAt: Date.now(),
+          confirmedAt: await blockTimestamp(receipt.blockNumber),
         });
       } catch {
         await this.resolveUnfinished(transaction);

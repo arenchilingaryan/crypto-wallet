@@ -5,10 +5,11 @@ export type TrackedTransactionStatus =
   | "broadcast-unknown"
   | "pending"
   | "confirmed"
-  | "reverted";
+  | "reverted"
+  | "superseded";
 
 export function countsAgainstOutflow(status: TrackedTransactionStatus) {
-  return status !== "reverted";
+  return status !== "reverted" && status !== "superseded";
 }
 
 export function isAwaitingChain(status: TrackedTransactionStatus) {
@@ -35,6 +36,9 @@ export function describeTrackedStatus(status: TrackedTransactionStatus) {
 
     case "reverted":
       return "Failed";
+
+    case "superseded":
+      return "Superseded";
   }
 }
 
@@ -78,6 +82,14 @@ export type TrackedTransaction = {
   nonce?: number | null;
 
   signedRawTx?: string | null;
+
+  gasLimit?: string | null;
+
+  routeLabel?: string | null;
+
+  broadcastAt?: number | null;
+
+  quotedAt?: number | null;
 
   createdAt: number;
 

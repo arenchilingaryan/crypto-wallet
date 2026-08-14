@@ -13,6 +13,8 @@ export type ExecutionDeviation = {
   worseThanQuote: boolean;
 };
 
+export type OutputProvenance = "receipt-logs" | "not-established";
+
 export type ExecutionAnalysis = {
   amountIn: string;
 
@@ -26,9 +28,23 @@ export type ExecutionAnalysis = {
 
   received: string | null;
 
+  provenance: OutputProvenance;
+
   deviation: ExecutionDeviation | null;
 
+  executionPrice: string | null;
+
+  headroomOverFloor: string | null;
+
   gasNative: string | null;
+
+  gasUsed: string | null;
+
+  gasLimit: string | null;
+
+  gasHeadroomPercent: number | null;
+
+  route: string | null;
 
   nativeSymbol: string;
 
@@ -62,6 +78,26 @@ function gasSpent(facts: ExecutionFacts): string | null {
   } catch {
     return null;
   }
+}
+
+export function quoteToBlockSeconds(
+  quotedAt: number | null,
+  blockTimestamp: number | null,
+): number | null {
+  if (
+    quotedAt === null ||
+    blockTimestamp === null ||
+    !Number.isFinite(quotedAt) ||
+    !Number.isFinite(blockTimestamp)
+  ) {
+    return null;
+  }
+
+  if (blockTimestamp < quotedAt) {
+    return null;
+  }
+
+  return Math.round((blockTimestamp - quotedAt) / 1000);
 }
 
 export function analyzeExecution(facts: ExecutionFacts): ExecutionAnalysis {
@@ -102,11 +138,33 @@ export function analyzeExecution(facts: ExecutionFacts): ExecutionAnalysis {
     unresolved.push("what the network fee cost");
   }
 
-  const secondsToConfirm =
-    facts.quotedAt !== null &&
-    facts.confirmedAt !== null &&
-    facts.confirmedAt >= facts.quotedAt
-      ? Math.round((facts.confirmedAt - facts.quotedAt) / 1000)
+  const secondsToConfirm = quoteToBlockSeconds(
+    facts.quotedAt,
+    facts.confirmedAt,
+  );
+
+  const headroomOverFloor =
+    received !== null && facts.minAmountOut !== null
+      ? subtractDecimalAmounts(received, facts.minAmountOut)
+      : null;
+
+  const gasHeadroomPercent =
+    facts.gasUsed !== null && facts.gasLimit !== null
+      ? (() => {
+          try {
+            const used = BigInt(facts.gasUsed);
+
+            const limit = BigInt(facts.gasLimit);
+
+            if (limit <= 0n) {
+              return null;
+            }
+
+            return Number((used * 10000n) / limit) / 100;
+          } catch {
+            return null;
+          }
+        })()
       : null;
 
   return {
@@ -122,9 +180,23 @@ export function analyzeExecution(facts: ExecutionFacts): ExecutionAnalysis {
 
     received,
 
+    provenance: received === null ? "not-established" : "receipt-logs",
+
     deviation,
 
+    executionPrice: divideDecimalAmounts(received, facts.amountIn),
+
+    headroomOverFloor,
+
     gasNative,
+
+    gasUsed: facts.gasUsed,
+
+    gasLimit: facts.gasLimit,
+
+    gasHeadroomPercent,
+
+    route: facts.route,
 
     nativeSymbol: facts.nativeSymbol,
 
@@ -132,4 +204,34 @@ export function analyzeExecution(facts: ExecutionFacts): ExecutionAnalysis {
 
     unresolved,
   };
+}
+
+export function divideDecimalAmounts(
+  numerator: string | null,
+  denominator: string | null,
+): string | null {
+  if (
+    numerator === null ||
+    denominator === null ||
+    !isDecimalAmount(numerator) ||
+    !isDecimalAmount(denominator)
+  ) {
+    return null;
+  }
+
+  const top = Number(numerator);
+
+  const bottom = Number(denominator);
+
+  if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom === 0) {
+    return null;
+  }
+
+  const result = top / bottom;
+
+  if (!Number.isFinite(result)) {
+    return null;
+  }
+
+  return result.toLocaleString("en-US", { maximumSignificantDigits: 8 });
 }

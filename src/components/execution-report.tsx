@@ -3,8 +3,26 @@ import { View } from "react-native";
 import { AppText } from "@/components/ui/text";
 
 import type { ExecutionAnalysis } from "@/core/transactions/analyzeExecution";
+import type { StoryStep } from "@/core/transactions/executionStory";
 
 import { styles } from "./execution-report.styles";
+
+const STORY_MARK: Record<StoryStep["state"], string> = {
+  done: "✓",
+  waiting: "…",
+  failed: "✕",
+  unknown: "?",
+};
+
+const STORY_TONE: Record<
+  StoryStep["state"],
+  "success" | "muted" | "danger" | "warning"
+> = {
+  done: "success",
+  waiting: "muted",
+  failed: "danger",
+  unknown: "warning",
+};
 
 function Row({
   label,
@@ -23,14 +41,41 @@ function Row({
         {label}
       </AppText>
 
-      <AppText
-        variant="bodyStrong"
-        tone={tone}
-        tabular
-        style={styles.value}
-      >
+      <AppText variant="bodyStrong" tone={tone} tabular style={styles.value}>
         {value}
       </AppText>
+    </View>
+  );
+}
+
+export function ExecutionStory({ steps }: { steps: StoryStep[] }) {
+  return (
+    <View style={styles.card}>
+      <AppText variant="overline" tone="muted">
+        What happened
+      </AppText>
+
+      {steps.map((step) => (
+        <View key={step.id} style={styles.step}>
+          <AppText
+            variant="bodyStrong"
+            tone={STORY_TONE[step.state]}
+            style={styles.mark}
+          >
+            {STORY_MARK[step.state]}
+          </AppText>
+
+          <View style={styles.stepText}>
+            <AppText variant="body">{step.title}</AppText>
+
+            {step.detail && (
+              <AppText variant="caption" tone="muted">
+                {step.detail}
+              </AppText>
+            )}
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
@@ -78,11 +123,32 @@ export function ExecutionReport({
 
           <Row
             label="Against the quote"
-            value={`${execution.deviation.amount} ${execution.symbolOut}`}
+            value={
+              execution.deviation.amount === "0"
+                ? "exactly as quoted"
+                : `${execution.deviation.amount} ${execution.symbolOut}`
+            }
             tone={execution.deviation.worseThanQuote ? "danger" : "success"}
           />
         </>
       )}
+
+      {execution.headroomOverFloor && (
+        <Row
+          label="Above your floor"
+          value={`${execution.headroomOverFloor} ${execution.symbolOut}`}
+          tone="secondary"
+        />
+      )}
+
+      {execution.executionPrice && (
+        <Row
+          label="Price you got"
+          value={`${execution.executionPrice} ${execution.symbolOut} per ${execution.symbolIn}`}
+        />
+      )}
+
+      <View style={styles.divider} />
 
       {execution.gasNative && (
         <Row
@@ -91,20 +157,33 @@ export function ExecutionReport({
         />
       )}
 
+      {execution.gasUsed && (
+        <Row
+          label="Gas used"
+          value={
+            execution.gasHeadroomPercent === null
+              ? execution.gasUsed
+              : `${execution.gasUsed} of the ${execution.gasLimit} you allowed`
+          }
+          tone="secondary"
+        />
+      )}
+
+      {execution.route && <Row label="Route" value={execution.route} />}
+
       {execution.secondsToConfirm !== null && (
         <Row
-          label="Time to confirm"
+          label="Quote to block"
           value={`${execution.secondsToConfirm}s`}
           tone="secondary"
         />
       )}
 
-      {execution.unresolved.length > 0 && (
-        <AppText variant="caption" tone="muted">
-          Not established: {execution.unresolved.join(", ")}. This wallet shows
-          nothing it cannot read from the chain.
-        </AppText>
-      )}
+      <AppText variant="caption" tone="muted">
+        {execution.provenance === "receipt-logs"
+          ? `What you received was read from the transaction receipt, not from the quote.`
+          : `Not established: ${execution.unresolved.join(", ")}. This wallet shows nothing it cannot read from the chain.`}
+      </AppText>
     </View>
   );
 }

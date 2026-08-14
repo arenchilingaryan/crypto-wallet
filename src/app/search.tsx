@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
@@ -14,6 +14,8 @@ import { walletApi } from "@/platform/react-native/walletApi";
 
 export default function SearchScreen() {
   const router = useRouter();
+
+  const { origin } = useLocalSearchParams<{ origin?: string }>();
 
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
 
@@ -147,6 +149,7 @@ export default function SearchScreen() {
 
           params: {
             id: assetId,
+            ...(origin === "explore" ? { origin: "explore" } : {}),
           },
         });
       }}

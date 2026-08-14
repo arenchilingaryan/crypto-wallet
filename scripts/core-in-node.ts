@@ -84,6 +84,18 @@ import {
 } from "@/core/security/panicFreeze";
 import { parsePinVerifier } from "@/core/security/pinVerifier";
 import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
+import { buildExecutionStory } from "@/core/transactions/executionStory";
+import { quoteToBlockSeconds } from "@/core/transactions/analyzeExecution";
+import {
+  decideTradeGate,
+  decideTradeGateForAll,
+  describeTradeGate,
+  outOfCoverage,
+  requiresTradeBriefing,
+  tradeTargets,
+} from "@/core/transactions/tradeGate";
+import { buildTokenIntelligence } from "@/core/token-intelligence/buildTokenIntelligence";
+import { executionFromTracked } from "@/core/transactions/transactionDetails";
 import {
   countsAgainstOutflow,
   isAwaitingChain,
@@ -1136,6 +1148,8 @@ export async function main() {
         status: "confirmed",
         blockNumber: null,
         gasUsed: null,
+        gasLimit: "200000",
+        route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
         confirmedAt: null,
       },
@@ -3352,6 +3366,8 @@ export async function main() {
     status: "confirmed" as const,
     blockNumber: null,
     gasUsed: null,
+    gasLimit: "200000",
+    route: "Uniswap V3, direct pool",
     effectiveGasPriceWei: null,
     confirmedAt: null,
   };
@@ -3676,6 +3692,8 @@ export async function main() {
         status: "confirmed",
         blockNumber: null,
         gasUsed: null,
+        gasLimit: "200000",
+        route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
         confirmedAt: null,
       },
@@ -3695,6 +3713,8 @@ export async function main() {
         status: "confirmed",
         blockNumber: null,
         gasUsed: null,
+        gasLimit: "200000",
+        route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
         confirmedAt: null,
       },
@@ -3726,6 +3746,8 @@ export async function main() {
         status: "pending",
         blockNumber: null,
         gasUsed: null,
+        gasLimit: "200000",
+        route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
         confirmedAt: null,
       },
@@ -3805,6 +3827,8 @@ export async function main() {
         status: "confirmed",
         blockNumber: null,
         gasUsed: null,
+        gasLimit: "200000",
+        route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
         confirmedAt: null,
       },
@@ -4288,6 +4312,8 @@ export async function main() {
     minAmountOut: "0.31424",
     actualAmountOut: "0.31491",
     gasUsed: "150000",
+    gasLimit: "200000",
+    route: "Uniswap V3, direct pool",
     effectiveGasPriceWei: "20000000000",
     nativeSymbol: "ETH",
     quotedAt: 1_000_000,
@@ -4312,6 +4338,8 @@ export async function main() {
     minAmountOut: "0.30",
     actualAmountOut: "0.315",
     gasUsed: null,
+    gasLimit: "200000",
+    route: "Uniswap V3, direct pool",
     effectiveGasPriceWei: null,
     nativeSymbol: "ETH",
     quotedAt: null,
@@ -4333,6 +4361,8 @@ export async function main() {
     minAmountOut: "0.30",
     actualAmountOut: null,
     gasUsed: null,
+    gasLimit: "200000",
+    route: "Uniswap V3, direct pool",
     effectiveGasPriceWei: null,
     nativeSymbol: "ETH",
     quotedAt: null,
@@ -4990,6 +5020,515 @@ export async function main() {
     "an unreadable nonce never writes a transfer off as dead",
     unknownNonce.action === "rebroadcast",
     "silence about the nonce is not proof it can never run",
+  );
+
+  const liveQuotedAt = 1_786_000_000_000;
+
+  const liveSwap = analyzeExecution({
+    amountIn: "0.001",
+    symbolIn: "ETH",
+    symbolOut: "USDC",
+    quotedAmountOut: "25.247581",
+    minAmountOut: "25.121343",
+    actualAmountOut: "25.247581",
+    gasUsed: "117610",
+    gasLimit: "142029",
+    route: "Uniswap V3, direct pool",
+    effectiveGasPriceWei: "1086250165",
+    nativeSymbol: "ETH",
+    quotedAt: liveQuotedAt,
+    confirmedAt: liveQuotedAt + 21_000,
+  });
+
+  check(
+    "the real Sepolia swap reads back as a complete report with nothing unresolved",
+    liveSwap.received === "25.247581" &&
+      liveSwap.provenance === "receipt-logs" &&
+      liveSwap.deviation?.amount === "0" &&
+      liveSwap.headroomOverFloor === "0.126238" &&
+      liveSwap.gasNative === "0.00012775388190565" &&
+      liveSwap.gasHeadroomPercent === 82.8 &&
+      liveSwap.secondsToConfirm === 21 &&
+      liveSwap.unresolved.length === 0,
+    `price ${liveSwap.executionPrice} USDC per ETH, gas ${liveSwap.gasHeadroomPercent}% of the limit`,
+  );
+
+  check(
+    "the price actually obtained is derived from what arrived, not from the quote",
+    liveSwap.executionPrice === "25,247.581",
+    `${liveSwap.executionPrice} USDC per ETH`,
+  );
+
+  const nativeOutSwap = analyzeExecution({
+    amountIn: "25",
+    symbolIn: "USDC",
+    symbolOut: "ETH",
+    quotedAmountOut: "0.00099",
+    minAmountOut: "0.00098",
+    actualAmountOut: null,
+    gasUsed: "120000",
+    gasLimit: "150000",
+    route: "Uniswap V3, direct pool",
+    effectiveGasPriceWei: "1000000000",
+    nativeSymbol: "ETH",
+    quotedAt: liveQuotedAt,
+    confirmedAt: liveQuotedAt + 15_000,
+  });
+
+  check(
+    "a swap that ends in native ETH says the output is not established instead of echoing the quote",
+    nativeOutSwap.received === null &&
+      nativeOutSwap.provenance === "not-established" &&
+      nativeOutSwap.deviation === null &&
+      nativeOutSwap.headroomOverFloor === null &&
+      nativeOutSwap.unresolved.includes("what actually arrived") &&
+      nativeOutSwap.executionPrice === null &&
+      nativeOutSwap.gasNative === "0.00012",
+    `provenance: ${nativeOutSwap.provenance}, price: ${String(nativeOutSwap.executionPrice)}, fee still known: ${nativeOutSwap.gasNative} ETH`,
+  );
+
+  const finishedStory = buildExecutionStory({
+    kind: "swap",
+    status: "confirmed",
+    quotedAt: liveQuotedAt,
+    broadcastAt: liveQuotedAt + 3_000,
+    confirmedAt: liveQuotedAt + 21_000,
+    blockNumber: "11486114",
+    hash: "0xa0e8d155e997f94cd1d0a8d1e965b96b47bfc291d719df0f5d91a76a2e90d8e1",
+  });
+
+  check(
+    "a finished operation reads as a story, in order, with the waiting time between steps",
+    finishedStory.map((step) => step.id).join(" → ") ===
+      "quoted → recorded → sent → mined" &&
+      finishedStory.every((step) => step.state === "done") &&
+      finishedStory[2].detail === "3s later" &&
+      finishedStory[3].title === "Included in block 11486114" &&
+      finishedStory[3].detail === "18s later",
+    finishedStory.map((step) => step.title).join(" / "),
+  );
+
+  const stuckStory = buildExecutionStory({
+    kind: "swap",
+    status: "broadcast-pending",
+    quotedAt: liveQuotedAt,
+    broadcastAt: null,
+    confirmedAt: null,
+    blockNumber: null,
+    hash: "0xdead",
+  });
+
+  const unknownStory = buildExecutionStory({
+    kind: "swap",
+    status: "broadcast-unknown",
+    quotedAt: liveQuotedAt,
+    broadcastAt: null,
+    confirmedAt: null,
+    blockNumber: null,
+    hash: "0xdead",
+  });
+
+  check(
+    "an operation still on its way says so plainly, and never claims it reached the chain",
+    stuckStory[stuckStory.length - 1].state === "waiting" &&
+      stuckStory.every((step) => step.id !== "mined") &&
+      unknownStory[unknownStory.length - 1].state === "unknown" &&
+      unknownStory[unknownStory.length - 1].detail?.includes(
+        "keeps counting the amount as spent",
+      ) === true,
+    `${stuckStory[stuckStory.length - 1].title} / ${unknownStory[unknownStory.length - 1].title}`,
+  );
+
+  const failedStory = buildExecutionStory({
+    kind: "swap",
+    status: "reverted",
+    quotedAt: liveQuotedAt,
+    broadcastAt: liveQuotedAt + 2_000,
+    confirmedAt: liveQuotedAt + 30_000,
+    blockNumber: "999",
+    hash: "0xdead",
+  });
+
+  check(
+    "a call that failed on chain is told as a failure, not as a success",
+    failedStory[failedStory.length - 1].state === "failed" &&
+      failedStory[failedStory.length - 1].title ===
+        "Included in a block, but the call failed",
+    failedStory[failedStory.length - 1].title,
+  );
+
+  const supersededStory = buildExecutionStory({
+    kind: "transfer",
+    status: "superseded",
+    quotedAt: liveQuotedAt,
+    broadcastAt: null,
+    confirmedAt: null,
+    blockNumber: null,
+    hash: "0xdead",
+  });
+
+  check(
+    "a superseded transfer claims only what can be proven: its nonce was used by another transaction",
+    supersededStory[supersededStory.length - 1].title ===
+      "Superseded before confirmation" &&
+      supersededStory.every((step) => !step.title.includes("block")) &&
+      countsAgainstOutflow("superseded") === false,
+    supersededStory[supersededStory.length - 1].detail ?? "",
+  );
+
+  check(
+    "the word quoted only appears where a quote existed",
+    buildExecutionStory({
+      kind: "transfer",
+      status: "confirmed",
+      quotedAt: liveQuotedAt,
+      broadcastAt: liveQuotedAt + 1000,
+      confirmedAt: liveQuotedAt + 5000,
+      blockNumber: "1",
+      hash: "0x1",
+    })[0].title === "Signed on this device" &&
+      buildExecutionStory({
+        kind: "approve",
+        status: "confirmed",
+        quotedAt: liveQuotedAt,
+        broadcastAt: liveQuotedAt + 1000,
+        confirmedAt: liveQuotedAt + 5000,
+        blockNumber: "1",
+        hash: "0x1",
+      })[0].title === "Permission signed" &&
+      buildExecutionStory({
+        kind: "swap",
+        status: "confirmed",
+        quotedAt: liveQuotedAt,
+        broadcastAt: liveQuotedAt + 1000,
+        confirmedAt: liveQuotedAt + 5000,
+        blockNumber: "1",
+        hash: "0x1",
+      })[0].title === "Quoted and signed",
+    "a plain transfer is never described as quoted",
+  );
+
+  const unfinishedSwap = executionFromTracked(
+    {
+      assetType: "swap",
+      status: "pending",
+      symbol: "ETH",
+      symbolOut: "USDC",
+      valueWei: "1000000000000000",
+      tokenDecimals: 18,
+      valueOutWei: "25247581",
+      minAmountOutWei: "25121343",
+      actualAmountOutWei: null,
+      tokenOutDecimals: 6,
+      gasUsed: null,
+      gasLimit: null,
+      routeLabel: null,
+      effectiveGasPriceWei: null,
+      createdAt: liveQuotedAt,
+      confirmedAt: null,
+    },
+    "ETH",
+  );
+
+  const namelessSwap = executionFromTracked(
+    {
+      assetType: "swap",
+      status: "confirmed",
+      symbol: "ETH",
+      symbolOut: undefined,
+      valueWei: "1000000000000000",
+      tokenDecimals: 18,
+      valueOutWei: "25247581",
+      minAmountOutWei: "25121343",
+      actualAmountOutWei: "25247581",
+      tokenOutDecimals: 6,
+      gasUsed: "117610",
+      gasLimit: "142029",
+      routeLabel: null,
+      effectiveGasPriceWei: "1086250165",
+      createdAt: liveQuotedAt,
+      confirmedAt: liveQuotedAt + 21_000,
+    },
+    "ETH",
+  );
+
+  check(
+    "no execution report is shown before the chain has answered, or without knowing the token",
+    unfinishedSwap === null && namelessSwap === null,
+    "an unfinished or nameless swap gets no report instead of a report full of blanks",
+  );
+
+  check(
+    "a block stamped earlier than the quote shows no elapsed time rather than a negative one",
+    quoteToBlockSeconds(liveQuotedAt, liveQuotedAt - 4_000) === null &&
+      quoteToBlockSeconds(liveQuotedAt, liveQuotedAt + 21_000) === 21 &&
+      quoteToBlockSeconds(liveQuotedAt, liveQuotedAt) === 0 &&
+      quoteToBlockSeconds(null, liveQuotedAt) === null,
+    "the device clock and the network clock are not the same clock",
+  );
+
+  const skewedStory = buildExecutionStory({
+    kind: "swap",
+    status: "confirmed",
+    quotedAt: liveQuotedAt,
+    broadcastAt: liveQuotedAt - 4_000,
+    confirmedAt: liveQuotedAt - 2_000,
+    blockNumber: "1",
+    hash: "0x1",
+  });
+
+  check(
+    "a skewed clock never puts a negative wait into the story",
+    skewedStory.every(
+      (step) => step.detail === null || !step.detail.startsWith("-"),
+    ),
+    skewedStory
+      .map((step) => step.detail ?? "no timing")
+      .join(" / "),
+  );
+
+  check(
+    "the record says nothing about a device losing its storage",
+    buildExecutionStory({
+      kind: "swap",
+      status: "confirmed",
+      quotedAt: liveQuotedAt,
+      broadcastAt: liveQuotedAt + 1000,
+      confirmedAt: liveQuotedAt + 2000,
+      blockNumber: "1",
+      hash: "0x1",
+    })[1].detail === "Saved before the transaction was sent.",
+    "no promise that a local record cannot be lost",
+  );
+
+  const TOKEN_A = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
+
+  const TOKEN_B = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
+
+  const chainId = 11155111;
+
+  const unavailableProviders = {
+    goplus: {
+      status: "unavailable" as const,
+      attemptedAt: 1,
+      reason: "network",
+    },
+    honeypotCheck: {
+      status: "unavailable" as const,
+      attemptedAt: 1,
+      reason: "network",
+    },
+    honeypotTopHolders: {
+      status: "unavailable" as const,
+      attemptedAt: 1,
+      reason: "network",
+    },
+  };
+
+  const blindIntelligence = buildTokenIntelligence({
+    token: { chainId, address: TOKEN_A, symbol: "AAA", name: "Token A" },
+    providers: unavailableProviders,
+    now: 1_000,
+  });
+
+  check(
+    "a trade check that could not be refreshed still demands a briefing",
+    requiresTradeBriefing(blindIntelligence) &&
+      blindIntelligence.availability.trade !== "available",
+    `trade availability: ${blindIntelligence.availability.trade}, summary: ${blindIntelligence.summary.kind}`,
+  );
+
+  const quietButBlind = {
+    ...blindIntelligence,
+    summary: { ...blindIntelligence.summary, kind: "no-major-issues" as const },
+    evidence: { conflicts: [] },
+  };
+
+  check(
+    "a clean-looking token whose trade data could not be read is still briefed, never waved through",
+    requiresTradeBriefing(quietButBlind),
+    `summary says ${quietButBlind.summary.kind} but trade data is ${quietButBlind.availability.trade}`,
+  );
+
+  check(
+    "nothing is prepared for a token that was never briefed",
+    decideTradeGate({
+      target: { chainId, address: TOKEN_A },
+      briefed: null,
+    }).proceed === false,
+    "no briefing, no preparation",
+  );
+
+  const cancelled = decideTradeGate({
+    target: { chainId, address: TOKEN_A },
+    briefed: { target: { chainId, address: TOKEN_A }, acknowledged: false },
+  });
+
+  check(
+    "cancelling the briefing stops the swap before anything is prepared or signed",
+    cancelled.proceed === false &&
+      cancelled.reason === "briefing-not-acknowledged",
+    `refused with: ${cancelled.reason}`,
+  );
+
+  const swapped = decideTradeGate({
+    target: { chainId, address: TOKEN_B },
+    briefed: { target: { chainId, address: TOKEN_A }, acknowledged: true },
+  });
+
+  check(
+    "a briefing for one token can never wave through a swap into another",
+    swapped.proceed === false &&
+      swapped.reason === "briefing-for-another-token" &&
+      describeTradeGate(swapped)?.includes("different token") === true,
+    `refused with: ${swapped.reason}`,
+  );
+
+  const otherChain = decideTradeGate({
+    target: { chainId: 1, address: TOKEN_A },
+    briefed: { target: { chainId, address: TOKEN_A }, acknowledged: true },
+  });
+
+  check(
+    "the same address on another network is not the same token",
+    otherChain.proceed === false,
+    `refused with: ${otherChain.reason}`,
+  );
+
+  check(
+    "an acknowledged briefing for this exact token lets preparation start",
+    decideTradeGate({
+      target: { chainId, address: TOKEN_A.toLowerCase() },
+      briefed: { target: { chainId, address: TOKEN_A }, acknowledged: true },
+    }).proceed === true &&
+      decideTradeGate({
+        target: { chainId, address: null },
+        briefed: null,
+      }).proceed === true,
+    "case of the address is display, not identity; native ETH has no token to brief",
+  );
+
+  check(
+    "the token being sold is checked too, not only the token being bought",
+    tradeTargets({
+      sold: { chainId, address: TOKEN_A },
+      bought: { chainId, address: null },
+    }).length === 1 &&
+      tradeTargets({
+        sold: { chainId, address: TOKEN_A },
+        bought: { chainId, address: TOKEN_B },
+      }).length === 2 &&
+      tradeTargets({
+        sold: { chainId, address: null },
+        bought: { chainId, address: null },
+      }).length === 0,
+    "selling a token into ETH is still a trade in that token",
+  );
+
+  check(
+    "selling a token nobody briefed is refused, even when the wallet buys plain ETH",
+    decideTradeGateForAll({
+      targets: tradeTargets({
+        sold: { chainId, address: TOKEN_A },
+        bought: { chainId, address: null },
+      }),
+      cleared: [],
+    }).proceed === false,
+    "the honeypot you are trying to escape is on the paying side",
+  );
+
+  check(
+    "clearing one side of a trade does not clear the other",
+    decideTradeGateForAll({
+      targets: tradeTargets({
+        sold: { chainId, address: TOKEN_A },
+        bought: { chainId, address: TOKEN_B },
+      }),
+      cleared: [
+        { target: { chainId, address: TOKEN_B }, acknowledged: true },
+      ],
+    }).proceed === false &&
+      decideTradeGateForAll({
+        targets: tradeTargets({
+          sold: { chainId, address: TOKEN_A },
+          bought: { chainId, address: TOKEN_B },
+        }),
+        cleared: [
+          { target: { chainId, address: TOKEN_A }, acknowledged: true },
+          { target: { chainId, address: TOKEN_B }, acknowledged: true },
+        ],
+      }).proceed === true,
+    "both sides have to be checked before anything is prepared",
+  );
+
+  const outOfCoverageIntelligence = {
+    ...blindIntelligence,
+    summary: { ...blindIntelligence.summary, kind: "no-major-issues" as const },
+    evidence: { conflicts: [] },
+    availability: {
+      ...blindIntelligence.availability,
+      trade: "unsupported" as const,
+      contract: "unsupported" as const,
+    },
+  };
+
+  check(
+    "a network the checks do not cover at all is not turned into a click-through screen",
+    requiresTradeBriefing(outOfCoverageIntelligence) === false &&
+      outOfCoverage(outOfCoverageIntelligence) &&
+      requiresTradeBriefing(quietButBlind),
+    "unsupported network is stated once, not asked about before every swap; unavailable data still stops the flow",
+  );
+
+  const briefedSwap = executionFromTracked(
+    {
+      assetType: "swap",
+      status: "confirmed",
+      symbol: "ETH",
+      symbolOut: "USDC",
+      valueWei: "1000000000000000",
+      tokenDecimals: 18,
+      valueOutWei: "25247581",
+      minAmountOutWei: "25121343",
+      actualAmountOutWei: "25247581",
+      tokenOutDecimals: 6,
+      gasUsed: "117610",
+      gasLimit: "142029",
+      routeLabel: "Uniswap V3, direct pool",
+      effectiveGasPriceWei: "1086250165",
+      quotedAt: liveQuotedAt,
+      createdAt: liveQuotedAt + 120_000,
+      confirmedAt: liveQuotedAt + 141_000,
+    },
+    "ETH",
+  );
+
+  check(
+    "time spent reading the token briefing counts against the quote, not against execution",
+    briefedSwap?.secondsToConfirm === 141,
+    `${briefedSwap?.secondsToConfirm}s from the quote, not 21s from the ledger write`,
+  );
+
+  const approveExecution = executionFromTracked(
+    {
+      assetType: "approve",
+      status: "confirmed",
+      symbol: "USDC",
+      valueWei: "1000000",
+      tokenDecimals: 6,
+      gasUsed: "46000",
+      gasLimit: "60000",
+      effectiveGasPriceWei: "1000000000",
+      createdAt: liveQuotedAt,
+      confirmedAt: liveQuotedAt + 10_000,
+    },
+    "ETH",
+  );
+
+  check(
+    "an approval never gets a swap execution report attached to it",
+    approveExecution === null,
+    "quote, floor, received and execution price belong to the trade, not to the permission",
   );
 
   console.log(
