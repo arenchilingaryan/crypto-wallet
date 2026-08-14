@@ -8,7 +8,12 @@ import {
 } from "./analyzeExecution";
 import { toDecimal } from "./executionFacts";
 
-export type TransactionDetailsStatus = "pending" | "confirmed" | "reverted";
+export type TransactionDetailsStatus =
+  | "broadcast-pending"
+  | "broadcast-unknown"
+  | "pending"
+  | "confirmed"
+  | "reverted";
 
 export type TransactionDetails = {
   hash: Hash;

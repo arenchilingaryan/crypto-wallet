@@ -68,15 +68,27 @@ import { WalletLockedError } from "@/core/security/sessionLock";
 import { createPin, hasPin, verifyPin } from "@/core/security/pin";
 import {
   advanceFreeze,
+  canUnfreezeNow,
   createFreeze,
+  describeRemaining,
   FREEZE_DURATION_MS,
+  FreezeStateUnreadableError,
   isFrozen,
+  requestUnfreeze,
+  UNFREEZE_COOLDOWN_MS,
+  unfreezeReadyInMs,
   parseFreeze,
   remainingFreezeMs,
   serializeFreeze,
   WalletFrozenError,
 } from "@/core/security/panicFreeze";
 import { parsePinVerifier } from "@/core/security/pinVerifier";
+import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
+import {
+  countsAgainstOutflow,
+  isAwaitingChain,
+  type TrackedTransactionStatus,
+} from "@/core/transactions/trackedTransaction";
 
 import { buildPolicyContext } from "@/core/security/policyContext";
 import {
@@ -116,7 +128,10 @@ import {
   valuePortfolio,
 } from "@/core/blockchain/valuePortfolio";
 import { DEFAULT_SECURITY_POLICY } from "@/core/security/securityPolicy";
-import { createOutflowGuard } from "@/core/security/outflowGuard";
+import {
+  createOutflowGuard,
+  ReservationStateError,
+} from "@/core/security/outflowGuard";
 import { analyzeExecution } from "@/core/transactions/analyzeExecution";
 import {
   creditedFromLogs,
@@ -3139,14 +3154,28 @@ export async function main() {
     "the highest clock ever seen is what counts",
   );
 
+  const damagedFreezeRecords = [
+    "{oops",
+    JSON.stringify({ ...freeze, until: freeze.frozenAt - 1 }),
+    JSON.stringify({ ...freeze, version: 2 }),
+  ];
+
+  const refusedDamaged = damagedFreezeRecords.filter((raw) => {
+    try {
+      parseFreeze(raw);
+
+      return false;
+    } catch (error) {
+      return error instanceof FreezeStateUnreadableError;
+    }
+  });
+
   check(
-    "a damaged freeze record is ignored rather than trusted",
-    parseFreeze("{oops") === null &&
-      parseFreeze(JSON.stringify({ ...freeze, until: freeze.frozenAt - 1 })) ===
-        null &&
-      parseFreeze(JSON.stringify({ ...freeze, version: 2 })) === null &&
-      parseFreeze(serializeFreeze(freeze))?.until === freeze.until,
-    "malformed freeze state cannot lock anyone out forever",
+    "a damaged lockdown record keeps signing blocked instead of quietly unlocking",
+    refusedDamaged.length === damagedFreezeRecords.length &&
+      parseFreeze(serializeFreeze(freeze))?.until === freeze.until &&
+      parseFreeze(null) === null,
+    "erasing the record is not a way out of a lockdown",
   );
 
   check(
@@ -4360,14 +4389,14 @@ export async function main() {
       id: "a",
       amountUsd: 600,
       limitUsd: 1000,
-      spentTodayUsd: 0,
+      spentTodayUsd: async () => 0,
     }),
 
     guardA.checkAndReserve({
       id: "b",
       amountUsd: 600,
       limitUsd: 1000,
-      spentTodayUsd: 0,
+      spentTodayUsd: async () => 0,
     }),
   ]);
 
@@ -4390,7 +4419,7 @@ export async function main() {
         id: `q${index}`,
         amountUsd: 250,
         limitUsd: 1000,
-        spentTodayUsd: 0,
+        spentTodayUsd: async () => 0,
       }),
     ),
   );
@@ -4412,7 +4441,7 @@ export async function main() {
     id: "new",
     amountUsd: 400,
     limitUsd: 1000,
-    spentTodayUsd: 700,
+    spentTodayUsd: async () => 700,
   });
 
   check(
@@ -4434,14 +4463,14 @@ export async function main() {
     id: "doomed",
     amountUsd: 700,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   const blockedWhileHeld = await guardD.checkAndReserve({
     id: "next",
     amountUsd: 400,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   await guardD.release("doomed");
@@ -4450,7 +4479,7 @@ export async function main() {
     id: "next",
     amountUsd: 400,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   check(
@@ -4471,7 +4500,7 @@ export async function main() {
     id: "orphan",
     amountUsd: 900,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   const restarted = createOutflowGuard({
@@ -4484,7 +4513,7 @@ export async function main() {
     id: "after-restart",
     amountUsd: 200,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   clock += 61_000;
@@ -4495,7 +4524,7 @@ export async function main() {
     id: "after-reconcile",
     amountUsd: 200,
     limitUsd: 1000,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   check(
@@ -4517,7 +4546,7 @@ export async function main() {
     id: "free",
     amountUsd: 999_999,
     limitUsd: null,
-    spentTodayUsd: 0,
+    spentTodayUsd: async () => 0,
   });
 
   check(
@@ -4526,6 +4555,441 @@ export async function main() {
       unlimited.reserved === false &&
       noLimit.value() === null,
     `stored: ${String(noLimit.value())}`,
+  );
+
+  const racingSpend = slowStore();
+
+  const guardG = createOutflowGuard({
+    store: racingSpend.store,
+    now: () => clock,
+  });
+
+  const order: string[] = [];
+
+  let spentSoFar = 0;
+
+  const firstInFlight = guardG
+    .checkAndReserve({
+      id: "r1",
+      amountUsd: 900,
+      limitUsd: 1000,
+      spentTodayUsd: async () => {
+        order.push("first reads the day");
+
+        return spentSoFar;
+      },
+    })
+    .then(async () => {
+      spentSoFar = 900;
+
+      order.push("first is broadcast and recorded");
+
+      await guardG.release("r1");
+    });
+
+  const secondResult = await guardG.checkAndReserve({
+    id: "r2",
+    amountUsd: 900,
+    limitUsd: 1000,
+    spentTodayUsd: async () => {
+      order.push("second reads the day");
+
+      return spentSoFar;
+    },
+  });
+
+  await firstInFlight;
+
+  check(
+    "the day's spending is read inside the lock, after everything queued ahead has finished",
+    order.join(" → ") ===
+      "first reads the day → first is broadcast and recorded → second reads the day" &&
+      secondResult.ok === false,
+    `${order.join(" → ")}; second ${secondResult.ok ? "passed" : "blocked"}`,
+  );
+
+  const corrupted = slowStore('[{"id":"held","amountUsd":800,"createdAt":');
+
+  const guardH = createOutflowGuard({
+    store: corrupted.store,
+    now: () => clock,
+  });
+
+  let corruptError: unknown = null;
+
+  try {
+    await guardH.checkAndReserve({
+      id: "after-corruption",
+      amountUsd: 900,
+      limitUsd: 1000,
+      spentTodayUsd: async () => 0,
+    });
+  } catch (error) {
+    corruptError = error;
+  }
+
+  check(
+    "a reservation file that cannot be read refuses the transfer instead of forgetting the hold",
+    corruptError instanceof ReservationStateError &&
+      corrupted.value() === '[{"id":"held","amountUsd":800,"createdAt":',
+    corruptError instanceof Error ? corruptError.name : "nothing thrown",
+  );
+
+  const notAnArray = slowStore('{"note":"not an array"}');
+
+  const guardI = createOutflowGuard({
+    store: notAnArray.store,
+    now: () => clock,
+  });
+
+  let shapeError: unknown = null;
+
+  try {
+    await guardI.reservedUsd();
+  } catch (error) {
+    shapeError = error;
+  }
+
+  check(
+    "a reservation file of the wrong shape is refused, not treated as empty",
+    shapeError instanceof ReservationStateError,
+    shapeError instanceof Error ? shapeError.name : "nothing thrown",
+  );
+
+  const junkEntries = slowStore('[{"id":"x","amountUsd":"800","createdAt":0}]');
+
+  const guardJ = createOutflowGuard({
+    store: junkEntries.store,
+    now: () => clock,
+  });
+
+  let junkError: unknown = null;
+
+  try {
+    await guardJ.reservedUsd();
+  } catch (error) {
+    junkError = error;
+  }
+
+  check(
+    "a hold whose amount is not a number is refused, not silently dropped",
+    junkError instanceof ReservationStateError,
+    junkError instanceof Error ? junkError.name : "nothing thrown",
+  );
+
+  const moneyStore = slowStore();
+
+  const guardK = createOutflowGuard({
+    store: moneyStore.store,
+    now: () => clock,
+  });
+
+  const hostileMoney = await Promise.all(
+    [
+      { label: "NaN", amountUsd: Number.NaN, spent: 0, limit: 1000 },
+      { label: "Infinity", amountUsd: Number.POSITIVE_INFINITY, spent: 0, limit: 1000 },
+      { label: "-Infinity", amountUsd: Number.NEGATIVE_INFINITY, spent: 0, limit: 1000 },
+      { label: "negative", amountUsd: -1000, spent: 0, limit: 1000 },
+      { label: "string", amountUsd: "500" as unknown as number, spent: 0, limit: 1000 },
+      { label: "spent NaN", amountUsd: 100, spent: Number.NaN, limit: 1000 },
+      { label: "spent negative", amountUsd: 100, spent: -100000, limit: 1000 },
+      { label: "limit NaN", amountUsd: 100, spent: 0, limit: Number.NaN },
+    ].map((probe) =>
+      guardK
+        .checkAndReserve({
+          id: `money-${probe.label}`,
+          amountUsd: probe.amountUsd,
+          limitUsd: probe.limit,
+          spentTodayUsd: async () => probe.spent,
+        })
+        .then((result) => ({ label: probe.label, result })),
+    ),
+  );
+
+  check(
+    "no unusable number can open the daily limit",
+    hostileMoney.every((probe) => probe.result.ok === false) &&
+      moneyStore.value() === null,
+    hostileMoney
+      .filter((probe) => probe.result.ok)
+      .map((probe) => probe.label)
+      .join(", ") || "all eight refused, nothing written",
+  );
+
+  const duplicateStore = slowStore();
+
+  const guardL = createOutflowGuard({
+    store: duplicateStore.store,
+    now: () => clock,
+  });
+
+  const firstHold = await guardL.checkAndReserve({
+    id: "same",
+    amountUsd: 500,
+    limitUsd: 1000,
+    spentTodayUsd: async () => 0,
+  });
+
+  const secondHold = await guardL.checkAndReserve({
+    id: "same",
+    amountUsd: 500,
+    limitUsd: 1000,
+    spentTodayUsd: async () => 0,
+  });
+
+  await guardL.release("same");
+
+  check(
+    "the same hold cannot be taken twice, so releasing it cannot free money that was never held",
+    firstHold.ok === true &&
+      secondHold.ok === false &&
+      (await guardL.reservedUsd()) === 0,
+    secondHold.ok === false ? secondHold.reason : "second hold passed",
+  );
+
+  const futureStore = slowStore(
+    JSON.stringify([
+      { id: "future", amountUsd: 900, createdAt: clock + 600_000 },
+    ]),
+  );
+
+  const guardM = createOutflowGuard({
+    store: futureStore.store,
+    now: () => clock,
+    ttlMs: 60_000,
+  });
+
+  const afterClamp = await guardM.reconcile();
+
+  check(
+    "a hold stamped in the future is pulled back to now instead of living forever",
+    afterClamp.length === 1 && afterClamp[0].createdAt === clock,
+    `createdAt ${afterClamp[0]?.createdAt} vs now ${clock}`,
+  );
+
+  const lifecycleStages: {
+    stage: string;
+    reservationHeld: boolean;
+    trackedStatus: TrackedTransactionStatus | null;
+  }[] = [
+    { stage: "reserved, not yet signed", reservationHeld: true, trackedStatus: null },
+    { stage: "signed, nothing written yet", reservationHeld: true, trackedStatus: null },
+    {
+      stage: "written before broadcast",
+      reservationHeld: true,
+      trackedStatus: "broadcast-pending",
+    },
+    {
+      stage: "hold released, waiting for the node",
+      reservationHeld: false,
+      trackedStatus: "broadcast-pending",
+    },
+    {
+      stage: "node never answered",
+      reservationHeld: false,
+      trackedStatus: "broadcast-unknown",
+    },
+    { stage: "accepted by the node", reservationHeld: false, trackedStatus: "pending" },
+    { stage: "mined", reservationHeld: false, trackedStatus: "confirmed" },
+  ];
+
+  const uncounted = lifecycleStages.filter(
+    (stage) =>
+      !stage.reservationHeld &&
+      (stage.trackedStatus === null ||
+        !countsAgainstOutflow(stage.trackedStatus)),
+  );
+
+  check(
+    "at every stage between authorization and the chain, the amount is counted somewhere",
+    uncounted.length === 0,
+    uncounted.length === 0
+      ? lifecycleStages.length + " stages, none of them lose the amount"
+      : `lost at: ${uncounted.map((stage) => stage.stage).join(", ")}`,
+  );
+
+  check(
+    "a transfer that reverted on chain stops counting, everything else keeps counting",
+    countsAgainstOutflow("reverted") === false &&
+      countsAgainstOutflow("broadcast-pending") &&
+      countsAgainstOutflow("broadcast-unknown") &&
+      countsAgainstOutflow("pending") &&
+      countsAgainstOutflow("confirmed"),
+    "only a reverted transfer is dropped from the day's outflow",
+  );
+
+  check(
+    "a record written before broadcast is still chased for a receipt",
+    isAwaitingChain("broadcast-pending") &&
+      isAwaitingChain("broadcast-unknown") &&
+      isAwaitingChain("pending") &&
+      !isAwaitingChain("confirmed") &&
+      !isAwaitingChain("reverted"),
+    "reconciliation keeps looking until the chain answers",
+  );
+
+  const lockedAt = 5_000_000;
+
+  const lockdown = createFreeze(lockedAt);
+
+  check(
+    "lockdown blocks signing and has no early exit until one is asked for",
+    isFrozen(lockdown, lockedAt + 60_000) &&
+      canUnfreezeNow(lockdown, lockedAt + 60_000) === false &&
+      unfreezeReadyInMs(lockdown, lockedAt + 60_000) ===
+        Number.POSITIVE_INFINITY,
+    "no unlock is pending until the owner asks",
+  );
+
+  const asked = requestUnfreeze(lockdown, lockedAt + 60_000);
+
+  check(
+    "asking for an early unlock starts a cooldown rather than unlocking",
+    isFrozen(asked, lockedAt + 60_000) &&
+      canUnfreezeNow(asked, lockedAt + 60_000) === false &&
+      unfreezeReadyInMs(asked, lockedAt + 60_000) === UNFREEZE_COOLDOWN_MS,
+    `${describeRemaining(unfreezeReadyInMs(asked, lockedAt + 60_000))} to wait`,
+  );
+
+  check(
+    "the early unlock opens only after the cooldown, and asking again does not restart it",
+    canUnfreezeNow(asked, lockedAt + 60_000 + UNFREEZE_COOLDOWN_MS) &&
+      canUnfreezeNow(
+        requestUnfreeze(asked, lockedAt + 60_000 + UNFREEZE_COOLDOWN_MS),
+        lockedAt + 60_000 + UNFREEZE_COOLDOWN_MS,
+      ),
+    "a second tap cannot push the cooldown further away",
+  );
+
+  const rewound = requestUnfreeze(
+    advanceFreeze(asked, lockedAt + 60_000 + UNFREEZE_COOLDOWN_MS / 2),
+    lockedAt - 1_000_000,
+  );
+
+  check(
+    "winding the clock back does not open the early unlock sooner",
+    canUnfreezeNow(rewound, lockedAt - 1_000_000) === false,
+    `${describeRemaining(unfreezeReadyInMs(rewound, lockedAt - 1_000_000))} still to wait`,
+  );
+
+  const lockdownAfterDay = advanceFreeze(
+    lockdown,
+    lockedAt + FREEZE_DURATION_MS + 1,
+  );
+
+  check(
+    "lockdown still clears itself after a day without anyone asking",
+    isFrozen(lockdownAfterDay, lockedAt + FREEZE_DURATION_MS + 1) === false,
+    "waiting it out remains an option",
+  );
+
+  const crashedBeforeRpc = resolveBroadcast({
+    receipt: null,
+    transactionSeen: false,
+    accountNonce: 7,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "a crash before the node was ever called resends the very same signed bytes",
+    crashedBeforeRpc.action === "rebroadcast",
+    `resolution: ${crashedBeforeRpc.action}`,
+  );
+
+  const answerLost = resolveBroadcast({
+    receipt: null,
+    transactionSeen: true,
+    accountNonce: 7,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "a transaction the node already has is tracked, not sent a second time",
+    answerLost.action === "mark-pending",
+    `resolution: ${answerLost.action}`,
+  );
+
+  const stillWaiting = resolveBroadcast({
+    receipt: null,
+    transactionSeen: false,
+    accountNonce: 7,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "a missing transaction whose nonce is still unused is retried, not written off",
+    stillWaiting.action === "rebroadcast",
+    "the account nonce has not moved past it",
+  );
+
+  const superseded = resolveBroadcast({
+    receipt: null,
+    transactionSeen: false,
+    accountNonce: 9,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "a transaction whose nonce was used by something else can never run, and stops counting",
+    superseded.action === "supersede" && countsAgainstOutflow("reverted") === false,
+    "the account moved past its nonce",
+  );
+
+  const mined = resolveBroadcast({
+    receipt: "success",
+    transactionSeen: true,
+    accountNonce: 9,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  const minedAndFailed = resolveBroadcast({
+    receipt: "reverted",
+    transactionSeen: true,
+    accountNonce: 9,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "once the chain has a receipt nothing is ever resent",
+    mined.action === "confirm" &&
+      mined.status === "confirmed" &&
+      minedAndFailed.action === "confirm" &&
+      minedAndFailed.status === "reverted",
+    "a receipt is the end of the line",
+  );
+
+  const nothingToResend = resolveBroadcast({
+    receipt: null,
+    transactionSeen: false,
+    accountNonce: 7,
+    txNonce: 7,
+    hasSignedTransaction: false,
+  });
+
+  check(
+    "without the signed bytes the record waits instead of guessing",
+    nothingToResend.action === "wait",
+    `resolution: ${nothingToResend.action}`,
+  );
+
+  const unknownNonce = resolveBroadcast({
+    receipt: null,
+    transactionSeen: false,
+    accountNonce: null,
+    txNonce: null,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "an unreadable nonce never writes a transfer off as dead",
+    unknownNonce.action === "rebroadcast",
+    "silence about the nonce is not proof it can never run",
   );
 
   console.log(

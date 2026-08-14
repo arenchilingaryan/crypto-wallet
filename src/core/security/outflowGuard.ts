@@ -8,6 +8,16 @@ import {
   type OutflowReservation,
 } from "./outflowReservations";
 
+export class ReservationStateError extends Error {
+  constructor() {
+    super(
+      "The record of transfers already awaiting signature cannot be read, so your daily limit cannot be enforced. Unlock the app again, or clear the wallet limits, before sending.",
+    );
+
+    this.name = "ReservationStateError";
+  }
+}
+
 export type ReservationStore = {
   read(): Promise<string | null>;
 
@@ -21,7 +31,7 @@ export type ReserveRequest = {
 
   limitUsd: number | null;
 
-  spentTodayUsd: number;
+  spentTodayUsd: () => Promise<number>;
 };
 
 export type ReserveResult =
@@ -33,9 +43,15 @@ export type ReserveResult =
   | {
       ok: false;
 
-      wouldTotalUsd: number;
+      reason:
+        | "over-daily-outflow"
+        | "unusable-amount"
+        | "unusable-context"
+        | "duplicate-reservation";
 
-      limitUsd: number;
+      wouldTotalUsd: number | null;
+
+      limitUsd: number | null;
     };
 
 export type OutflowGuard = {
@@ -72,8 +88,14 @@ export function createOutflowGuard({
     return result;
   }
 
-  async function readAll(): Promise<OutflowReservation[]> {
-    return parseReservations(await store.read());
+  async function readOrThrow(): Promise<OutflowReservation[]> {
+    const state = parseReservations(await store.read());
+
+    if (!state.readable) {
+      throw new ReservationStateError();
+    }
+
+    return state.reservations;
   }
 
   return {
@@ -83,20 +105,22 @@ export function createOutflowGuard({
           return { ok: true, reserved: false };
         }
 
-        const current = now();
+        const stored = await readOrThrow();
+
+        const spentTodayUsd = await request.spentTodayUsd();
 
         const outcome = reserveOutflow({
-          reservations: await readAll(),
+          reservations: stored,
 
           id: request.id,
 
           amountUsd: request.amountUsd,
 
-          spentTodayUsd: request.spentTodayUsd,
+          spentTodayUsd,
 
           limitUsd: request.limitUsd,
 
-          now: current,
+          now: now(),
 
           ttlMs,
         });
@@ -104,6 +128,8 @@ export function createOutflowGuard({
         if (!outcome.ok) {
           return {
             ok: false,
+
+            reason: outcome.reason,
 
             wouldTotalUsd: outcome.wouldTotalUsd,
 
@@ -119,7 +145,7 @@ export function createOutflowGuard({
 
     release(id) {
       return serialize(async () => {
-        const next = releaseReservation(await readAll(), id);
+        const next = releaseReservation(await readOrThrow(), id);
 
         await store.write(serializeReservations(next));
       });
@@ -129,13 +155,32 @@ export function createOutflowGuard({
       return serialize(async () => {
         const current = now();
 
-        const stored = await readAll();
+        const state = parseReservations(await store.read());
 
-        const live = stored.filter(
+        if (!state.readable) {
+          await store.write(serializeReservations([]));
+
+          throw new ReservationStateError();
+        }
+
+        const clamped = state.reservations.map((reservation) =>
+          reservation.createdAt > current
+            ? { ...reservation, createdAt: current }
+            : reservation,
+        );
+
+        const live = clamped.filter(
           (reservation) => current - reservation.createdAt < ttlMs,
         );
 
-        if (live.length !== stored.length) {
+        const changed =
+          live.length !== state.reservations.length ||
+          clamped.some(
+            (reservation, index) =>
+              reservation.createdAt !== state.reservations[index]?.createdAt,
+          );
+
+        if (changed) {
           await store.write(serializeReservations(live));
         }
 
@@ -145,7 +190,7 @@ export function createOutflowGuard({
 
     reservedUsd() {
       return serialize(async () =>
-        reservedTotalUsd(await readAll(), now(), ttlMs),
+        reservedTotalUsd(await readOrThrow(), now(), ttlMs),
       );
     },
   };

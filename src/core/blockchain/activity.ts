@@ -95,7 +95,12 @@ export function presentActivity(item: ActivityItem): ActivityPresentation {
   }
 }
 
-export type ActivityStatus = "pending" | "confirmed" | "reverted";
+export type ActivityStatus =
+  | "broadcast-pending"
+  | "broadcast-unknown"
+  | "pending"
+  | "confirmed"
+  | "reverted";
 
 export type ActivityOrigin = "wallet-signed" | "native-transfer" | "token-log";
 

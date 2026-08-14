@@ -1,5 +1,7 @@
 export const FREEZE_DURATION_MS = 24 * 60 * 60 * 1000;
 
+export const UNFREEZE_COOLDOWN_MS = 10 * 60 * 1000;
+
 export type FreezeState = {
   version: 1;
 
@@ -8,6 +10,8 @@ export type FreezeState = {
   until: number;
 
   seen: number;
+
+  unfreezeRequestedAt?: number | null;
 };
 
 export class WalletFrozenError extends Error {
@@ -15,9 +19,9 @@ export class WalletFrozenError extends Error {
 
   constructor(remainingMs: number) {
     super(
-      `This wallet is frozen and cannot sign anything for another ${describeRemaining(
+      `This wallet is locked down and cannot sign anything for another ${describeRemaining(
         remainingMs,
-      )}. Waiting is the only way out, by design.`,
+      )}. You can start an early unlock from the Security screen; it takes a cooldown and your PIN twice.`,
     );
 
     this.name = "WalletFrozenError";
@@ -57,6 +61,35 @@ export function advanceFreeze(state: FreezeState, now: number): FreezeState {
   return now > state.seen ? { ...state, seen: now } : state;
 }
 
+export function requestUnfreeze(state: FreezeState, now: number): FreezeState {
+  const advanced = advanceFreeze(state, now);
+
+  if (
+    typeof advanced.unfreezeRequestedAt === "number" &&
+    advanced.unfreezeRequestedAt <= advanced.seen
+  ) {
+    return advanced;
+  }
+
+  return { ...advanced, unfreezeRequestedAt: advanced.seen };
+}
+
+export function unfreezeReadyInMs(state: FreezeState, now: number): number {
+  const requestedAt = state.unfreezeRequestedAt;
+
+  if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const clock = Math.max(now, state.seen);
+
+  return Math.max(0, requestedAt + UNFREEZE_COOLDOWN_MS - clock);
+}
+
+export function canUnfreezeNow(state: FreezeState, now: number): boolean {
+  return unfreezeReadyInMs(state, now) === 0;
+}
+
 export function remainingFreezeMs(state: FreezeState, now: number): number {
   const clock = Math.max(now, state.seen);
 
@@ -69,6 +102,16 @@ export function isFrozen(state: FreezeState | null, now: number): boolean {
 
 export function serializeFreeze(state: FreezeState): string {
   return JSON.stringify(state);
+}
+
+export class FreezeStateUnreadableError extends Error {
+  constructor() {
+    super(
+      "This device has a lockdown record that cannot be read, so signing stays blocked. Restore this wallet from its recovery phrase if this does not clear.",
+    );
+
+    this.name = "FreezeStateUnreadableError";
+  }
 }
 
 export function parseFreeze(raw: string | null): FreezeState | null {
@@ -89,7 +132,7 @@ export function parseFreeze(raw: string | null): FreezeState | null {
       !Number.isFinite(parsed.seen) ||
       parsed.until < parsed.frozenAt
     ) {
-      return null;
+      throw new FreezeStateUnreadableError();
     }
 
     return {
@@ -97,8 +140,17 @@ export function parseFreeze(raw: string | null): FreezeState | null {
       frozenAt: parsed.frozenAt,
       until: parsed.until,
       seen: parsed.seen,
+      unfreezeRequestedAt:
+        typeof parsed.unfreezeRequestedAt === "number" &&
+        Number.isFinite(parsed.unfreezeRequestedAt)
+          ? parsed.unfreezeRequestedAt
+          : null,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof FreezeStateUnreadableError) {
+      throw error;
+    }
+
+    throw new FreezeStateUnreadableError();
   }
 }

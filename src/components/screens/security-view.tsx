@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   describeRemaining,
   FREEZE_DURATION_MS,
+  UNFREEZE_COOLDOWN_MS,
 } from "@/core/security/panicFreeze";
 
 import { Colors } from "@/constants/theme";
@@ -33,9 +34,23 @@ type SecurityViewProps = {
 
   onRevoke: (approval: TokenApproval) => void;
 
-  freeze: { frozen: boolean; remainingMs: number };
+  freeze: {
+    frozen: boolean;
+
+    remainingMs: number;
+
+    unfreezeRequested: boolean;
+
+    unfreezeReadyInMs: number;
+  };
+
+  pinConfigured: boolean;
 
   onFreeze: () => void;
+
+  onRequestUnfreeze: () => void;
+
+  onCompleteUnfreeze: () => void;
 };
 
 function formatAllowance(approval: TokenApproval) {
@@ -43,9 +58,7 @@ function formatAllowance(approval: TokenApproval) {
     return "Unlimited";
   }
 
-  const value = Number(
-    formatUnits(approval.allowance, approval.tokenDecimals),
-  );
+  const value = Number(formatUnits(approval.allowance, approval.tokenDecimals));
 
   if (!Number.isFinite(value)) {
     return "—";
@@ -69,7 +82,10 @@ export function SecurityView({
   loading,
   error,
   freeze,
+  pinConfigured,
   onFreeze,
+  onRequestUnfreeze,
+  onCompleteUnfreeze,
   onRevoke,
 }: SecurityViewProps) {
   const approvals = scan?.approvals ?? [];
@@ -89,33 +105,89 @@ export function SecurityView({
       {freeze.frozen ? (
         <View style={styles.summary}>
           <AppText variant="overline" tone="danger">
-            Frozen
+            Locked down
           </AppText>
 
           <AppText variant="bodyStrong" tone="paper">
-            Signing is blocked for another {describeRemaining(freeze.remainingMs)}
+            Signing is blocked for another{" "}
+            {describeRemaining(freeze.remainingMs)}
           </AppText>
 
-          <AppText variant="caption" tone="muted">
-            Nothing can be sent, swapped or approved until the freeze runs out.
-            It cannot be lifted early, not even with your PIN — that is the
-            point of it.
-          </AppText>
+          {!pinConfigured && (
+            <AppText variant="caption" tone="muted">
+              This wallet has no PIN, so there is no way to end the lockdown
+              early. It clears itself when the time runs out.
+            </AppText>
+          )}
+
+          {pinConfigured && !freeze.unfreezeRequested && (
+            <>
+              <AppText variant="caption" tone="muted">
+                Nothing can be sent, swapped or approved until this clears on
+                its own. To lift it sooner you have to ask now, wait out a
+                cooldown, and confirm with your PIN a second time.
+              </AppText>
+
+              <Button
+                title="Request unlock"
+                variant="secondary"
+                onPress={onRequestUnfreeze}
+              />
+            </>
+          )}
+
+          {pinConfigured &&
+            freeze.unfreezeRequested &&
+            freeze.unfreezeReadyInMs > 0 && (
+              <AppText variant="caption" tone="muted">
+                Early unlock opens in{" "}
+                {describeRemaining(freeze.unfreezeReadyInMs)}. Come back then
+                and enter your PIN again to finish it.
+              </AppText>
+            )}
+
+          {pinConfigured &&
+            freeze.unfreezeRequested &&
+            freeze.unfreezeReadyInMs === 0 && (
+              <>
+                <AppText variant="caption" tone="muted">
+                  The cooldown is over. Enter your PIN once more to unlock
+                  signing.
+                </AppText>
+
+                <Button
+                  title="Finish unlock"
+                  variant="secondary"
+                  onPress={onCompleteUnfreeze}
+                />
+              </>
+            )}
         </View>
       ) : (
         <View style={styles.summary}>
           <AppText variant="overline" tone="muted">
-            If someone is standing over you
+            If your phone is out of your hands
           </AppText>
 
           <AppText variant="caption" tone="muted">
-            Freezing blocks every signature on this device for{" "}
-            {describeRemaining(FREEZE_DURATION_MS)}. You cannot undo it, so
-            there is nothing anyone can force you to undo. Your coins stay where
-            they are and your recovery phrase still works on another device.
+            Lockdown blocks every signature and the recovery phrase on this
+            device, and clears itself after{" "}
+            {describeRemaining(FREEZE_DURATION_MS)}. Unlocking sooner takes your
+            PIN, a {describeRemaining(UNFREEZE_COOLDOWN_MS)} cooldown, and your
+            PIN again, so it is not one tap away for whoever is holding the
+            phone. Your coins stay where they are.
           </AppText>
 
-          <Button title="Freeze this wallet" variant="secondary" onPress={onFreeze} />
+          <AppText variant="caption" tone="muted">
+            It buys time; it is not proof against someone who can change this
+            device&apos;s clock, and your recovery phrase still works elsewhere.
+          </AppText>
+
+          <Button
+            title="Lock down signing"
+            variant="secondary"
+            onPress={onFreeze}
+          />
         </View>
       )}
 
@@ -148,10 +220,7 @@ export function SecurityView({
             {formatUsd(totalExposure)}
           </AppText>
 
-          <AppText
-            variant="caption"
-            tone={riskyCount > 0 ? "danger" : "muted"}
-          >
+          <AppText variant="caption" tone={riskyCount > 0 ? "danger" : "muted"}>
             {approvals.length} active permission
             {approvals.length === 1 ? "" : "s"}
             {riskyCount > 0 ? ` · ${riskyCount} risky` : ""}

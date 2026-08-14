@@ -1,4 +1,4 @@
-import type { Hash } from "viem";
+import type { Hash, Hex } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
@@ -7,8 +7,13 @@ import type { PreparedErc20Transfer } from "@/core/transactions/erc20Transfer";
 import type { PreparedNativeTransfer } from "@/core/transactions/nativeTransfer";
 import type { PreparedSwap } from "@/core/transactions/swap";
 
-import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
+import {
+  isAwaitingChain,
+  type TrackedTransaction,
+  type TrackedTransactionStatus,
+} from "@/core/transactions/trackedTransaction";
 import { creditedFromLogs } from "@/core/transactions/executionFacts";
+import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
 
 import { walletEngine } from "./compositionRoot";
 
@@ -29,6 +34,10 @@ export const trackedTransactionApi = {
     hash: Hash,
 
     valueUsd: number | null = null,
+
+    initialStatus: TrackedTransactionStatus = "pending",
+
+    signedRawTx: string | null = null,
   ): Promise<TrackedTransaction> {
     const wallet = await walletEngine.getActive();
 
@@ -65,9 +74,13 @@ export const trackedTransactionApi = {
 
       valueUsd,
 
+      nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
+
+      signedRawTx,
+
       createdAt: Date.now(),
 
-      status: "pending",
+      status: initialStatus,
 
       blockNumber: null,
 
@@ -89,6 +102,10 @@ export const trackedTransactionApi = {
     hash: Hash,
 
     valueUsd: number | null = null,
+
+    initialStatus: TrackedTransactionStatus = "pending",
+
+    signedRawTx: string | null = null,
   ): Promise<TrackedTransaction> {
     const wallet = await walletEngine.getActive();
 
@@ -129,9 +146,13 @@ export const trackedTransactionApi = {
 
       contractAddress: transaction.token,
 
+      nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
+
+      signedRawTx,
+
       createdAt: Date.now(),
 
-      status: "pending",
+      status: initialStatus,
 
       blockNumber: null,
 
@@ -151,6 +172,10 @@ export const trackedTransactionApi = {
     transaction: PreparedSwap,
 
     hash: Hash,
+
+    initialStatus: TrackedTransactionStatus = "pending",
+
+    signedRawTx: string | null = null,
   ): Promise<TrackedTransaction> {
     const wallet = await walletEngine.getActive();
 
@@ -201,9 +226,13 @@ export const trackedTransactionApi = {
 
       actualAmountOutWei: null,
 
+      nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
+
+      signedRawTx,
+
       createdAt: Date.now(),
 
-      status: "pending",
+      status: initialStatus,
 
       blockNumber: null,
 
@@ -223,6 +252,10 @@ export const trackedTransactionApi = {
     transaction: PreparedErc20Approve,
 
     hash: Hash,
+
+    initialStatus: TrackedTransactionStatus = "pending",
+
+    signedRawTx: string | null = null,
   ): Promise<TrackedTransaction> {
     const wallet = await walletEngine.getActive();
 
@@ -261,9 +294,13 @@ export const trackedTransactionApi = {
 
       contractAddress: transaction.token,
 
+      nonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
+
+      signedRawTx,
+
       createdAt: Date.now(),
 
-      status: "pending",
+      status: initialStatus,
 
       blockNumber: null,
 
@@ -277,6 +314,102 @@ export const trackedTransactionApi = {
     await saveTrackedTransaction(tracked);
 
     return tracked;
+  },
+
+  async markBroadcastResult(hash: Hash, status: TrackedTransactionStatus) {
+    await updateTrackedTransaction(hash, { status });
+  },
+
+  async resolveUnfinished(transaction: TrackedTransaction) {
+    let transactionSeen = false;
+
+    try {
+      await ethereumPublicClient.getTransaction({ hash: transaction.hash });
+
+      transactionSeen = true;
+    } catch {
+      transactionSeen = false;
+    }
+
+    let accountNonce: number | null = null;
+
+    if (!transactionSeen) {
+      try {
+        accountNonce = await ethereumPublicClient.getTransactionCount({
+          address: transaction.from,
+
+          blockTag: "latest",
+        });
+      } catch {
+        accountNonce = null;
+      }
+    }
+
+    const resolution = resolveBroadcast({
+      receipt: null,
+
+      transactionSeen,
+
+      accountNonce,
+
+      txNonce: typeof transaction.nonce === "number" ? transaction.nonce : null,
+
+      hasSignedTransaction:
+        typeof transaction.signedRawTx === "string" &&
+        transaction.signedRawTx.startsWith("0x"),
+    });
+
+    switch (resolution.action) {
+      case "mark-pending":
+        if (transaction.status !== "pending") {
+          await updateTrackedTransaction(transaction.hash, {
+            status: "pending",
+          });
+        }
+
+        return resolution;
+
+      case "supersede":
+        await updateTrackedTransaction(transaction.hash, {
+          status: "reverted",
+        });
+
+        return resolution;
+
+      case "rebroadcast":
+        try {
+          await ethereumPublicClient.sendRawTransaction({
+            serializedTransaction: transaction.signedRawTx as Hex,
+          });
+
+          await updateTrackedTransaction(transaction.hash, {
+            status: "pending",
+          });
+        } catch (error) {
+          console.error(
+            `Could not resend transaction ${transaction.hash}:`,
+            error,
+          );
+
+          if (transaction.status === "broadcast-pending") {
+            await updateTrackedTransaction(transaction.hash, {
+              status: "broadcast-unknown",
+            });
+          }
+        }
+
+        return resolution;
+
+      case "wait":
+      case "confirm":
+        if (transaction.status === "broadcast-pending") {
+          await updateTrackedTransaction(transaction.hash, {
+            status: "broadcast-unknown",
+          });
+        }
+
+        return resolution;
+    }
   },
 
   async listRelatedToActiveWallet() {
@@ -343,9 +476,10 @@ export const trackedTransactionApi = {
   async refreshPending() {
     const transactions = await this.listRelatedToActiveWallet();
 
-    const pending = transactions.filter(
-      (transaction) => transaction.status === "pending",
+    const pending = transactions.filter((transaction) =>
+      isAwaitingChain(transaction.status),
     );
+
     for (const transaction of pending) {
       try {
         const receipt = await ethereumPublicClient.getTransactionReceipt({
@@ -376,10 +510,12 @@ export const trackedTransactionApi = {
 
           actualAmountOutWei: credited === null ? null : credited.toString(),
 
+          signedRawTx: null,
+
           confirmedAt: Date.now(),
         });
       } catch {
-        void 0;
+        await this.resolveUnfinished(transaction);
       }
     }
 

@@ -59,7 +59,16 @@ export default function SecurityScreen() {
 
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const [freeze, setFreeze] = useState({ frozen: false, remainingMs: 0 });
+  const [freeze, setFreeze] = useState({
+    frozen: false,
+    remainingMs: 0,
+    unfreezeRequested: false,
+    unfreezeReadyInMs: 0,
+  });
+
+  const [unfreezeStage, setUnfreezeStage] = useState<
+    "request" | "complete" | null
+  >(null);
 
   useEffect(() => {
     void securityApi.hasPin().then(setPinConfigured);
@@ -91,14 +100,14 @@ export default function SecurityScreen() {
 
   function handleFreeze() {
     Alert.alert(
-      "Freeze this wallet?",
+      "Lock down signing?",
       `Nothing can be sent, swapped or approved from this device for ${describeRemaining(
         FREEZE_DURATION_MS,
-      )}. You will not be able to lift it early, even with your PIN. Your coins stay where they are.`,
+      )}. Lifting it sooner takes your PIN, a cooldown, and your PIN again. Your coins stay where they are.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Freeze",
+          text: "Lock down",
           style: "destructive",
           onPress: () => {
             void panicApi.freeze().then(() => panicApi.status()).then(setFreeze);
@@ -260,6 +269,47 @@ export default function SecurityScreen() {
     }
   }
 
+  if (unfreezeStage !== null) {
+    return (
+      <PinView
+        key={`unfreeze-${unfreezeStage}`}
+        mode="verify"
+        onCancel={() => {
+          setUnfreezeStage(null);
+        }}
+        onSubmit={async (pin) => {
+          const result = await securityApi.verifyCurrentPin(pin);
+
+          if (!result.ok) {
+            return describePinFailure(result);
+          }
+
+          if (unfreezeStage === "request") {
+            await panicApi.requestUnfreeze();
+          } else {
+            const unfrozen = await panicApi.completeUnfreeze();
+
+            if (!unfrozen.ok) {
+              setFreeze(await panicApi.status());
+
+              setUnfreezeStage(null);
+
+              return `The cooldown is not over yet. ${describeRemaining(
+                unfrozen.readyInMs,
+              )} left.`;
+            }
+          }
+
+          setFreeze(await panicApi.status());
+
+          setUnfreezeStage(null);
+
+          return null;
+        }}
+      />
+    );
+  }
+
   if (transaction && sendStatus) {
     return (
       <SendStatusView
@@ -335,7 +385,14 @@ export default function SecurityScreen() {
       loading={loading}
       error={error}
       freeze={freeze}
+      pinConfigured={pinConfigured === true}
       onFreeze={handleFreeze}
+      onRequestUnfreeze={() => {
+        setUnfreezeStage("request");
+      }}
+      onCompleteUnfreeze={() => {
+        setUnfreezeStage("complete");
+      }}
       onRevoke={(approval) => {
         void handleRevoke(approval);
       }}

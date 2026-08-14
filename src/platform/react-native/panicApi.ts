@@ -1,10 +1,14 @@
 import {
   advanceFreeze,
+  canUnfreezeNow,
   createFreeze,
+  FreezeStateUnreadableError,
   isFrozen,
   parseFreeze,
   remainingFreezeMs,
+  requestUnfreeze,
   serializeFreeze,
+  unfreezeReadyInMs,
   WalletFrozenError,
   type FreezeState,
 } from "@/core/security/panicFreeze";
@@ -20,6 +24,10 @@ async function readFreeze(): Promise<FreezeState | null> {
     return null;
   }
 
+  if (state.until < state.frozenAt) {
+    throw new FreezeStateUnreadableError();
+  }
+
   const advanced = advanceFreeze(state, Date.now());
 
   if (advanced !== state) {
@@ -30,7 +38,15 @@ async function readFreeze(): Promise<FreezeState | null> {
 }
 
 export const panicApi = {
-  async status(): Promise<{ frozen: boolean; remainingMs: number }> {
+  async status(): Promise<{
+    frozen: boolean;
+
+    remainingMs: number;
+
+    unfreezeRequested: boolean;
+
+    unfreezeReadyInMs: number;
+  }> {
     const state = await readFreeze();
 
     const now = Date.now();
@@ -40,10 +56,64 @@ export const panicApi = {
         await expoKeyValueStorage.remove(FREEZE_KEY);
       }
 
-      return { frozen: false, remainingMs: 0 };
+      return {
+        frozen: false,
+        remainingMs: 0,
+        unfreezeRequested: false,
+        unfreezeReadyInMs: 0,
+      };
     }
 
-    return { frozen: true, remainingMs: remainingFreezeMs(state!, now) };
+    const frozenState = state!;
+
+    const readyIn = unfreezeReadyInMs(frozenState, now);
+
+    return {
+      frozen: true,
+
+      remainingMs: remainingFreezeMs(frozenState, now),
+
+      unfreezeRequested: Number.isFinite(readyIn),
+
+      unfreezeReadyInMs: Number.isFinite(readyIn) ? readyIn : 0,
+    };
+  },
+
+  async requestUnfreeze(): Promise<void> {
+    const state = await readFreeze();
+
+    const now = Date.now();
+
+    if (!isFrozen(state, now)) {
+      return;
+    }
+
+    await expoKeyValueStorage.set(
+      FREEZE_KEY,
+      serializeFreeze(requestUnfreeze(state!, now)),
+    );
+  },
+
+  async completeUnfreeze(): Promise<
+    { ok: true } | { ok: false; readyInMs: number }
+  > {
+    const state = await readFreeze();
+
+    const now = Date.now();
+
+    if (!isFrozen(state, now)) {
+      await expoKeyValueStorage.remove(FREEZE_KEY);
+
+      return { ok: true };
+    }
+
+    if (!canUnfreezeNow(state!, now)) {
+      return { ok: false, readyInMs: unfreezeReadyInMs(state!, now) };
+    }
+
+    await expoKeyValueStorage.remove(FREEZE_KEY);
+
+    return { ok: true };
   },
 
   async freeze(): Promise<void> {

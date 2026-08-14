@@ -8,6 +8,16 @@ export type OutflowReservation = {
   createdAt: number;
 };
 
+export type ReservationState =
+  | {
+      readable: true;
+
+      reservations: OutflowReservation[];
+    }
+  | {
+      readable: false;
+    };
+
 export type ReservationOutcome =
   | {
       ok: true;
@@ -17,44 +27,59 @@ export type ReservationOutcome =
   | {
       ok: false;
 
-      reason: "over-daily-outflow";
+      reason:
+        | "over-daily-outflow"
+        | "unusable-amount"
+        | "unusable-context"
+        | "duplicate-reservation";
 
-      wouldTotalUsd: number;
+      wouldTotalUsd: number | null;
 
-      limitUsd: number;
+      limitUsd: number | null;
     };
 
-export function parseReservations(raw: string | null): OutflowReservation[] {
-  if (!raw) {
-    return [];
+export function isUsableMoney(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isReservation(entry: unknown): entry is OutflowReservation {
+  if (typeof entry !== "object" || entry === null) {
+    return false;
   }
+
+  const candidate = entry as Partial<OutflowReservation>;
+
+  return (
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    isUsableMoney(candidate.amountUsd) &&
+    typeof candidate.createdAt === "number" &&
+    Number.isFinite(candidate.createdAt)
+  );
+}
+
+export function parseReservations(raw: string | null): ReservationState {
+  if (raw === null || raw.trim() === "") {
+    return { readable: true, reservations: [] };
+  }
+
+  let parsed: unknown;
 
   try {
-    const parsed: unknown = JSON.parse(raw);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter((entry): entry is OutflowReservation => {
-      if (typeof entry !== "object" || entry === null) {
-        return false;
-      }
-
-      const candidate = entry as Partial<OutflowReservation>;
-
-      return (
-        typeof candidate.id === "string" &&
-        typeof candidate.amountUsd === "number" &&
-        Number.isFinite(candidate.amountUsd) &&
-        candidate.amountUsd >= 0 &&
-        typeof candidate.createdAt === "number" &&
-        Number.isFinite(candidate.createdAt)
-      );
-    });
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    return { readable: false };
   }
+
+  if (!Array.isArray(parsed)) {
+    return { readable: false };
+  }
+
+  if (!parsed.every(isReservation)) {
+    return { readable: false };
+  }
+
+  return { readable: true, reservations: parsed };
 }
 
 export function serializeReservations(
@@ -68,9 +93,11 @@ export function liveReservations(
   now: number,
   ttlMs: number = RESERVATION_TTL_MS,
 ): OutflowReservation[] {
-  return reservations.filter(
-    (reservation) => now - reservation.createdAt < ttlMs,
-  );
+  return reservations.filter((reservation) => {
+    const age = now - reservation.createdAt;
+
+    return age < ttlMs;
+  });
 }
 
 export function reservedTotalUsd(
@@ -107,6 +134,42 @@ export function reserveOutflow({
 
   ttlMs?: number;
 }): ReservationOutcome {
+  if (!isUsableMoney(amountUsd)) {
+    return {
+      ok: false,
+      reason: "unusable-amount",
+      wouldTotalUsd: null,
+      limitUsd: isUsableMoney(limitUsd) ? limitUsd : null,
+    };
+  }
+
+  if (!isUsableMoney(spentTodayUsd) || !isUsableMoney(limitUsd)) {
+    return {
+      ok: false,
+      reason: "unusable-context",
+      wouldTotalUsd: null,
+      limitUsd: isUsableMoney(limitUsd) ? limitUsd : null,
+    };
+  }
+
+  if (typeof id !== "string" || id.length === 0) {
+    return {
+      ok: false,
+      reason: "duplicate-reservation",
+      wouldTotalUsd: null,
+      limitUsd,
+    };
+  }
+
+  if (reservations.some((reservation) => reservation.id === id)) {
+    return {
+      ok: false,
+      reason: "duplicate-reservation",
+      wouldTotalUsd: null,
+      limitUsd,
+    };
+  }
+
   const live = liveReservations(reservations, now, ttlMs);
 
   const wouldTotalUsd =

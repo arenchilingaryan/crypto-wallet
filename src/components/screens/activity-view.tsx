@@ -4,6 +4,7 @@ import {
   presentActivity,
   type ActivityItem,
 } from "@/core/blockchain/activity";
+import { describeTrackedStatus } from "@/core/transactions/trackedTransaction";
 
 import { AppText } from "@/components/ui/text";
 
@@ -91,7 +92,7 @@ export function ActivityView({
                     variant="caption"
                     tone={item.status === "reverted" ? "danger" : "warning"}
                   >
-                    {item.status === "reverted" ? "Failed" : "Pending"}
+                    {describeTrackedStatus(item.status)}
                   </AppText>
                 )}
 

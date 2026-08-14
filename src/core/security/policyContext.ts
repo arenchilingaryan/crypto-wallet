@@ -4,7 +4,10 @@ import {
   provesRecipientWasChosen,
   type ActivityItem,
 } from "@/core/blockchain/activity";
-import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
+import {
+  countsAgainstOutflow,
+  type TrackedTransaction,
+} from "@/core/transactions/trackedTransaction";
 
 import type { PolicyContext } from "./securityPolicy";
 
@@ -75,6 +78,42 @@ export function buildPolicyContext({
   };
 }
 
+function countsAsOutflow(
+  item: TrackedTransaction,
+  ownerAddress: string,
+  now: number,
+) {
+  if (!countsAgainstOutflow(item.status) || now - item.createdAt > DAY_MS) {
+    return false;
+  }
+
+  if (item.assetType !== "native" && item.assetType !== "erc20") {
+    return false;
+  }
+
+  return item.to.toLowerCase() !== ownerAddress;
+}
+
+export function countUnvaluedOutflows({
+  owner,
+  tracked,
+  now = Date.now(),
+}: {
+  owner: Address;
+
+  tracked: TrackedTransaction[];
+
+  now?: number;
+}): number {
+  const ownerAddress = owner.toLowerCase();
+
+  return tracked.filter(
+    (item) =>
+      countsAsOutflow(item, ownerAddress, now) &&
+      !(typeof item.valueUsd === "number" && Number.isFinite(item.valueUsd)),
+  ).length;
+}
+
 export function sumTrackedOutflowUsd({
   owner,
   tracked,
@@ -92,15 +131,7 @@ export function sumTrackedOutflowUsd({
   const ownerAddress = owner.toLowerCase();
 
   return tracked.reduce((total, item) => {
-    if (item.status === "reverted" || now - item.createdAt > DAY_MS) {
-      return total;
-    }
-
-    if (item.assetType !== "native" && item.assetType !== "erc20") {
-      return total;
-    }
-
-    if (item.to.toLowerCase() === ownerAddress) {
+    if (!countsAsOutflow(item, ownerAddress, now)) {
       return total;
     }
 

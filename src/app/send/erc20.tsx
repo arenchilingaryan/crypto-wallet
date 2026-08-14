@@ -8,6 +8,7 @@ import {
   formatUnits,
   getAddress,
   isAddress,
+  keccak256,
   type Address,
   type Hash,
 } from "viem";
@@ -394,6 +395,8 @@ export default function SendErc20Screen() {
         : "Failed to authorize transaction";
     }
 
+    let recorded = false;
+
     try {
       const signed = await signerApi.signErc20Transfer(
         transaction,
@@ -404,13 +407,34 @@ export default function SendErc20Screen() {
 
       setSendStatus("broadcasting");
 
-      const hash = await transactionApi.broadcastSignedTransaction(signed);
+      const expectedHash = keccak256(signed);
 
-      setTransactionHash(hash);
+      await trackedTransactionApi.trackErc20Transfer(
+        transaction,
+        expectedHash,
+        amountUsd,
+        "broadcast-pending",
+        signed,
+      );
 
-      await trackedTransactionApi.trackErc20Transfer(transaction, hash, amountUsd);
+      recorded = true;
 
       await securityApi.releaseOutflow(reservationId);
+
+      setTransactionHash(expectedHash);
+
+      const hash = await transactionApi
+        .broadcastSignedTransaction(signed)
+        .catch(async (broadcastError: unknown) => {
+          await trackedTransactionApi.markBroadcastResult(
+            expectedHash,
+            "broadcast-unknown",
+          );
+
+          throw broadcastError;
+        });
+
+      await trackedTransactionApi.markBroadcastResult(hash, "pending");
 
       if (amountUsd === null && token) {
         void trackedTransactionApi.backfillValueUsd(hash, token.symbol, amount);
@@ -433,7 +457,9 @@ export default function SendErc20Screen() {
     } catch (submissionError) {
       console.error("Transaction submission failed:", submissionError);
 
-      await securityApi.releaseOutflow(reservationId);
+      if (!recorded) {
+        await securityApi.releaseOutflow(reservationId);
+      }
 
       setSendStatus(null);
 

@@ -94,7 +94,13 @@ export const securityApi = {
       reservationId = hold.id;
     }
 
-    grantTransactionAuthorization(transaction, authorization);
+    try {
+      grantTransactionAuthorization(transaction, authorization);
+    } catch (error) {
+      await outflowGuardApi.release(reservationId);
+
+      throw error;
+    }
 
     return {
       ok: true as const,

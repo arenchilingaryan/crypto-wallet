@@ -4,7 +4,13 @@ import { ActivityIndicator } from "react-native";
 
 import { useRouter } from "expo-router";
 
-import { formatEther, getAddress, isAddress, type Hash } from "viem";
+import {
+  formatEther,
+  getAddress,
+  isAddress,
+  keccak256,
+  type Hash,
+} from "viem";
 
 import { PinView } from "@/components/screens/pin-view";
 import { SendNativeView } from "@/components/screens/send-native-view";
@@ -296,6 +302,8 @@ export default function SendNativeScreen() {
         : "Failed to authorize transaction";
     }
 
+    let recorded = false;
+
     try {
       const signed = await signerApi.signNativeTransfer(
         transaction,
@@ -306,13 +314,34 @@ export default function SendNativeScreen() {
 
       setSendStatus("broadcasting");
 
-      const hash = await transactionApi.broadcastSignedTransaction(signed);
+      const expectedHash = keccak256(signed);
 
-      setTransactionHash(hash);
+      await trackedTransactionApi.trackNativeTransfer(
+        transaction,
+        expectedHash,
+        amountUsd,
+        "broadcast-pending",
+        signed,
+      );
 
-      await trackedTransactionApi.trackNativeTransfer(transaction, hash, amountUsd);
+      recorded = true;
 
       await securityApi.releaseOutflow(reservationId);
+
+      setTransactionHash(expectedHash);
+
+      const hash = await transactionApi
+        .broadcastSignedTransaction(signed)
+        .catch(async (broadcastError: unknown) => {
+          await trackedTransactionApi.markBroadcastResult(
+            expectedHash,
+            "broadcast-unknown",
+          );
+
+          throw broadcastError;
+        });
+
+      await trackedTransactionApi.markBroadcastResult(hash, "pending");
 
       if (amountUsd === null) {
         void trackedTransactionApi.backfillValueUsd(
@@ -339,7 +368,9 @@ export default function SendNativeScreen() {
     } catch (submissionError) {
       console.error("Transaction submission failed:", submissionError);
 
-      await securityApi.releaseOutflow(reservationId);
+      if (!recorded) {
+        await securityApi.releaseOutflow(reservationId);
+      }
 
       setSendStatus(null);
 

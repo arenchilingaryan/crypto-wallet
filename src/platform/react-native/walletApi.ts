@@ -7,6 +7,7 @@ import {
 } from "@/core/wallet/revealSecret";
 
 import { walletEngine } from "./compositionRoot";
+import { panicApi } from "./panicApi";
 import { expoSecretStore } from "./secretStore";
 
 export const walletApi = {
@@ -32,6 +33,8 @@ export const walletApi = {
 
   async reveal(): Promise<RevealedSecret> {
     assertSessionUnlocked();
+
+    await panicApi.assertNotFrozen();
 
     const wallet = await walletEngine.getActive();
 
