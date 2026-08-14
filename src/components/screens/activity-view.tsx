@@ -10,6 +10,8 @@ import { AppText } from "@/components/ui/text";
 
 import { Screen } from "@/components/ui/screen";
 
+import { shortenAddress } from "@/utils/format";
+
 import { styles } from "./activity-view.styles";
 
 type ActivityViewProps = {
@@ -23,10 +25,6 @@ type ActivityViewProps = {
 
   onBack?: () => void;
 };
-
-function shortenAddress(address: string) {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
 
 function formatTime(timestamp: number | null) {
   if (!timestamp) {

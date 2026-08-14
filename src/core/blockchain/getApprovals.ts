@@ -10,10 +10,34 @@ import {
   permit2Abi,
   PERMIT2_UNLIMITED,
 } from "./permit2";
+import { truncateAddress } from "./addressFingerprint";
+import { pairKey, type Coverage } from "./approvalDiscovery";
 
 export type ApprovalChannel = "erc20" | "permit2";
 
 export type ApprovalRisk = "low" | "medium" | "high" | "critical";
+
+export type TokenMeta = {
+  symbol: string;
+
+  name: string;
+
+  decimals: number;
+
+  logo: string | null;
+};
+
+// A candidate the caller found in the wallet's approval history that the known
+// list would have missed. `tokenMeta` describes the token when it is not one
+// the wallet currently holds (so we have no portfolio row to borrow a symbol
+// from); absent metadata falls back to an address-derived placeholder.
+export type DiscoveredApproval = {
+  token: Address;
+
+  spender: Address;
+
+  tokenMeta?: TokenMeta | null;
+};
 
 export type TokenApproval = {
   id: string;
@@ -40,6 +64,10 @@ export type TokenApproval = {
 
   unlimited: boolean;
 
+  // False when the current allowance could not be read. The row is shown so the
+  // permission is not silently treated as revoked, but without a number.
+  allowanceCertain: boolean;
+
   expiresAt: number | null;
 
   exposureUsd: number | null;
@@ -61,9 +89,27 @@ export type ApprovalScan = {
   expiredCount: number;
 
   uncertainCount: number;
+
+  // Whether the approval history was read in full. "partial" means at least one
+  // block window (or the node itself) could not be read, so undiscovered
+  // spenders may exist — the empty-state must not claim safety.
+  coverage: Coverage;
+
+  // Distinct active spenders that are not on the known list — the contracts a
+  // known-list-only scan would never have surfaced.
+  unknownSpenderCount: number;
 };
 
 const UNLIMITED_THRESHOLD = 2n ** 255n;
+
+// A hostile or broken token can flood discovery with unreadable spenders. Cap
+// how many "could not verify" rows we surface; the overflow still forces
+// partial coverage so the screen never reads as complete.
+const MAX_UNCERTAIN_DISCOVERED_ROWS = 25;
+
+function shortenTokenAddress(token: Address): string {
+  return truncateAddress(token.toLowerCase());
+}
 
 export function approvalExposureUsd({
   allowanceTokens,
@@ -140,11 +186,65 @@ function countDistinctSpenders(
   return unique.size;
 }
 
+type DirectPair = {
+  token: Address;
+
+  spender: Address;
+
+  // The portfolio row for this token when the wallet holds it — the source of
+  // balance, price and display metadata. Null for discovered tokens the wallet
+  // no longer holds.
+  asset: PortfolioAsset | null;
+
+  meta: TokenMeta | null;
+
+  // True for a candidate that came from history rather than the known list, so
+  // an unreadable allowance is surfaced as uncertain rather than dropped.
+  discovered: boolean;
+};
+
+function assetMeta(asset: PortfolioAsset): TokenMeta {
+  return {
+    symbol: asset.symbol,
+
+    name: asset.name,
+
+    decimals: asset.decimals,
+
+    logo: asset.logo,
+  };
+}
+
+function resolveMeta(pair: DirectPair): TokenMeta {
+  if (pair.asset) {
+    return assetMeta(pair.asset);
+  }
+
+  if (pair.meta) {
+    return pair.meta;
+  }
+
+  return {
+    symbol: shortenTokenAddress(pair.token),
+
+    name: "Unrecognised token",
+
+    decimals: 18,
+
+    logo: null,
+  };
+}
+
 export async function getApprovals(
   owner: Address,
   assets: PortfolioAsset[],
   networkId: string,
   client: PublicClient,
+  options?: {
+    discovered?: DiscoveredApproval[];
+
+    coverage?: Coverage;
+  },
 ): Promise<ApprovalScan> {
   const spenders = getKnownSpenders(networkId);
 
@@ -155,31 +255,84 @@ export async function getApprovals(
       asset.type === "erc20" && Boolean(asset.contractAddress),
   );
 
-  if (
-    tokens.length === 0 ||
-    (spenders.length === 0 && permit2Spenders.length === 0)
-  ) {
-    return {
-      approvals: [],
-      totalExposureUsd: 0,
-      checkedTokens: tokens.length,
-      checkedSpenders: countDistinctSpenders(spenders, permit2Spenders),
-      expiredCount: 0,
-      uncertainCount: 0,
-    };
+  const discovered = options?.discovered ?? [];
+
+  // Build the direct-channel candidate set: every known spender against every
+  // held token (bootstrap), unioned with everything discovery found. Dedupe by
+  // (token, spender); a held-token entry wins so we keep balance and price.
+  const directPairMap = new Map<string, DirectPair>();
+
+  const assetByToken = new Map<string, PortfolioAsset>();
+
+  for (const token of tokens) {
+    assetByToken.set(token.contractAddress.toLowerCase(), token);
   }
 
-  const directCalls = tokens.flatMap((token) =>
-    spenders.map((spender) => ({
-      address: token.contractAddress,
+  for (const token of tokens) {
+    for (const spender of spenders) {
+      const pair: DirectPair = {
+        token: token.contractAddress,
 
-      abi: erc20Abi,
+        spender: spender.address,
 
-      functionName: "allowance" as const,
+        asset: token,
 
-      args: [owner, spender.address] as const,
-    })),
-  );
+        meta: null,
+
+        discovered: false,
+      };
+
+      directPairMap.set(pairKey(pair), pair);
+    }
+  }
+
+  for (const candidate of discovered) {
+    const asset = assetByToken.get(candidate.token.toLowerCase()) ?? null;
+
+    const pair: DirectPair = {
+      token: candidate.token,
+
+      spender: candidate.spender,
+
+      asset,
+
+      meta: candidate.tokenMeta ?? null,
+
+      discovered: true,
+    };
+
+    const key = pairKey(pair);
+
+    const existing = directPairMap.get(key);
+
+    if (!existing) {
+      directPairMap.set(key, pair);
+
+      continue;
+    }
+
+    // Already covered by the bootstrap; keep it but remember it was also seen in
+    // history so its held-token metadata is preserved.
+    if (!existing.asset && asset) {
+      existing.asset = asset;
+    }
+
+    if (!existing.meta && pair.meta) {
+      existing.meta = pair.meta;
+    }
+  }
+
+  const directPairs = [...directPairMap.values()];
+
+  const directCalls = directPairs.map((pair) => ({
+    address: pair.token,
+
+    abi: erc20Abi,
+
+    functionName: "allowance" as const,
+
+    args: [owner, pair.spender] as const,
+  }));
 
   const permit2Calls = tokens.flatMap((token) =>
     permit2Spenders.map((spender) => ({
@@ -216,6 +369,10 @@ export async function getApprovals(
 
   let expiredCount = 0;
 
+  let uncertainDiscoveredRows = 0;
+
+  let uncertainTruncated = false;
+
   const permit2Budget = new Map<string, bigint>();
 
   const permit2BudgetKnown = new Set<string>();
@@ -237,17 +394,84 @@ export async function getApprovals(
   }
 
   directResults.forEach((result, index) => {
-    const token = tokens[Math.floor(index / spenders.length)];
+    const pair = directPairs[index];
 
-    const spender = spenders[index % spenders.length];
+    const isPermit2Spender =
+      pair.spender.toLowerCase() === PERMIT2_ADDRESS.toLowerCase();
 
-    if (spender.address.toLowerCase() === PERMIT2_ADDRESS.toLowerCase()) {
-      if (result.status === "success") {
-        permit2BudgetKnown.add(token.contractAddress.toLowerCase());
-      }
+    if (isPermit2Spender && result.status === "success") {
+      permit2BudgetKnown.add(pair.token.toLowerCase());
     }
 
     if (result.status !== "success") {
+      // A budget probe against the Permit2 contract is not an approval row; its
+      // failure is expressed by leaving the budget unknown, which makes the
+      // Permit2 permissions uncertain further down.
+      if (isPermit2Spender) {
+        return;
+      }
+
+      // A candidate we know is a real held token (bootstrap) or found in
+      // history, whose current allowance cannot be read, is surfaced as
+      // uncertain — never silently treated as zero.
+      if (pair.discovered) {
+        if (uncertainDiscoveredRows >= MAX_UNCERTAIN_DISCOVERED_ROWS) {
+          uncertainTruncated = true;
+
+          return;
+        }
+
+        uncertainDiscoveredRows += 1;
+      }
+
+      const known = findKnownSpender(networkId, pair.spender);
+
+      const meta = resolveMeta(pair);
+
+      approvals.push({
+        id: `erc20-uncertain-${pair.token.toLowerCase()}-${pair.spender.toLowerCase()}`,
+
+        channel: "erc20",
+
+        token: pair.token,
+
+        tokenSymbol: meta.symbol,
+
+        tokenName: meta.name,
+
+        tokenDecimals: meta.decimals,
+
+        tokenLogo: meta.logo,
+
+        spender: pair.spender,
+
+        spenderName: known?.name ?? "Unknown contract",
+
+        spenderPurpose: known?.purpose ?? "Unrecognised spender",
+
+        allowance: 0n,
+
+        unlimited: false,
+
+        allowanceCertain: false,
+
+        expiresAt: null,
+
+        exposureUsd: null,
+
+        exposureCertain: false,
+
+        risk: scoreApproval({
+          unlimited: false,
+
+          exposureUsd: null,
+
+          spenderKnown: known !== null,
+
+          holdsTokens: true,
+        }),
+      });
+
       return;
     }
 
@@ -259,40 +483,53 @@ export async function getApprovals(
 
     const unlimited = allowance >= UNLIMITED_THRESHOLD;
 
-    if (spender.address.toLowerCase() === PERMIT2_ADDRESS.toLowerCase()) {
-      permit2Budget.set(token.contractAddress.toLowerCase(), allowance);
+    if (isPermit2Spender) {
+      permit2Budget.set(pair.token.toLowerCase(), allowance);
     }
 
-    const exposureUsd = exposureOf(
-      token,
-      Number(formatUnits(allowance, token.decimals)),
-      unlimited,
-    );
+    const known = findKnownSpender(networkId, pair.spender);
+
+    const meta = resolveMeta(pair);
+
+    const exposureUsd = pair.asset
+      ? exposureOf(
+          pair.asset,
+          Number(formatUnits(allowance, meta.decimals)),
+          unlimited,
+        )
+      : null;
+
+    const holdsTokens = pair.asset
+      ? !Number.isFinite(Number(pair.asset.balance)) ||
+        Number(pair.asset.balance) > 0
+      : true;
 
     approvals.push({
-      id: `erc20-${token.contractAddress.toLowerCase()}-${spender.address.toLowerCase()}`,
+      id: `erc20-${pair.token.toLowerCase()}-${pair.spender.toLowerCase()}`,
 
       channel: "erc20",
 
-      token: token.contractAddress,
+      token: pair.token,
 
-      tokenSymbol: token.symbol,
+      tokenSymbol: meta.symbol,
 
-      tokenName: token.name,
+      tokenName: meta.name,
 
-      tokenDecimals: token.decimals,
+      tokenDecimals: meta.decimals,
 
-      tokenLogo: token.logo,
+      tokenLogo: meta.logo,
 
-      spender: spender.address,
+      spender: pair.spender,
 
-      spenderName: spender.name,
+      spenderName: known?.name ?? "Unknown contract",
 
-      spenderPurpose: spender.purpose,
+      spenderPurpose: known?.purpose ?? "Unrecognised spender",
 
       allowance,
 
       unlimited,
+
+      allowanceCertain: true,
 
       expiresAt: null,
 
@@ -302,9 +539,12 @@ export async function getApprovals(
 
       risk: scoreApproval({
         unlimited,
+
         exposureUsd,
-        spenderKnown: true,
-        holdsTokens: !Number.isFinite(Number(token.balance)) || Number(token.balance) > 0,
+
+        spenderKnown: known !== null,
+
+        holdsTokens,
       }),
     });
   });
@@ -381,6 +621,8 @@ export async function getApprovals(
 
       unlimited,
 
+      allowanceCertain: true,
+
       expiresAt: expiration,
 
       exposureUsd,
@@ -423,7 +665,8 @@ export async function getApprovals(
     }
 
     const rows = approvals.filter(
-      (approval) => approval.token.toLowerCase() === key,
+      (approval) =>
+        approval.token.toLowerCase() === key && approval.allowanceCertain,
     );
 
     const cap = (value: number) => Math.min(value, balanceTokens);
@@ -462,6 +705,25 @@ export async function getApprovals(
     (approval) => !approval.exposureCertain,
   ).length;
 
+  const knownSet = new Set(spenders.map((spender) => spender.address.toLowerCase()));
+
+  const unknownSpenderCount = new Set(
+    approvals
+      .filter(
+        (approval) =>
+          approval.allowanceCertain &&
+          !knownSet.has(approval.spender.toLowerCase()),
+      )
+      .map((approval) => approval.spender.toLowerCase()),
+  ).size;
+
+  const requestedCoverage = options?.coverage ?? "complete";
+
+  const coverage: Coverage =
+    uncertainTruncated || requestedCoverage === "partial"
+      ? "partial"
+      : "complete";
+
   return {
     approvals,
 
@@ -474,5 +736,9 @@ export async function getApprovals(
     expiredCount,
 
     uncertainCount,
+
+    coverage,
+
+    unknownSpenderCount,
   };
 }

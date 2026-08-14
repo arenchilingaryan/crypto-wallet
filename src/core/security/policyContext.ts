@@ -49,6 +49,13 @@ export function buildPolicyContext({
   }
 
   for (const item of tracked) {
+    // Only transfers name a recipient the user chose; an approve's `to` is a
+    // token contract and a swap's `to` is a router, which must not count as a
+    // known recipient.
+    if (item.assetType !== "native" && item.assetType !== "erc20") {
+      continue;
+    }
+
     if (item.from.toLowerCase() !== ownerAddress) {
       continue;
     }

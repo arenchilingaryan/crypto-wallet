@@ -7,6 +7,7 @@ import { AppText } from "@/components/ui/text";
 
 import { styles } from "./asset-picker-view.styles";
 
+import { shortenAddress } from "@/utils/format";
 import { SearchIcon } from "@/components/icons/search-icon";
 import { Colors } from "@/constants/theme";
 import { router } from "expo-router";
@@ -30,10 +31,6 @@ type AssetPickerViewProps = {
 
   onBack: () => void;
 };
-
-function shortenAddress(address: string) {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
 
 export function AssetPickerView({
   title,

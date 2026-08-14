@@ -130,6 +130,7 @@ function parseTimestamp(transfer: AlchemyTransfer): number | null {
 
 async function requestTransfers(
   filter: TransferFilter,
+  options?: { categories?: string[] },
 ): Promise<AlchemyTransfer[]> {
   const API_KEY = getDataApiKey();
 
@@ -161,7 +162,7 @@ async function requestTransfers(
 
             ...filter,
 
-            category: ["external", "internal", "erc20"],
+            category: options?.categories ?? ["external", "internal", "erc20"],
 
             excludeZeroValue: true,
 
@@ -186,7 +187,14 @@ async function requestTransfers(
     throw new Error(result.error.message);
   }
 
-  return result.result?.transfers ?? [];
+  // A 200 with neither an error nor a result object is a malformed/undocumented
+  // response — treat it as a failed read, not as an empty history, so callers
+  // that judge coverage do not mistake "could not read" for "nothing here".
+  if (!result.result) {
+    throw new Error("Activity response was missing its result");
+  }
+
+  return result.result.transfers ?? [];
 }
 
 function mapTransfer(
@@ -248,6 +256,56 @@ function mapTransfer(
 
     timestamp: parseTimestamp(transfer),
   };
+}
+
+// The addresses the user has PROVABLY chosen to send to on-chain: direct native
+// sends only, where the wallet itself is the sender. An ERC-20 `Transfer` log
+// where `from` is the wallet does not prove the user typed that `to` — a
+// contract could have moved the tokens on their behalf — so it is not counted.
+// Crucially, incoming transfers are excluded: a poisoning lookalike arrives as
+// an inbound dust transfer, and letting its sender into this set would mark the
+// attacker's address as "known" — inverting the defence. Pure so the filter is
+// directly testable. This set proves familiarity, never its absence: because
+// ERC-20 sends are deliberately out of scope, "not here" is never "never sent".
+export function provenRecipientsFromTransfers(
+  owner: Address,
+  transfers: { category: string; from: string; to?: string | null }[],
+): Address[] {
+  const ownerLower = owner.toLowerCase();
+
+  const recipients = new Set<string>();
+
+  for (const transfer of transfers) {
+    if (transfer.category !== "external") {
+      continue;
+    }
+
+    const from = normalizeAddress(transfer.from);
+
+    const to = normalizeAddress(transfer.to);
+
+    if (!from || !to) {
+      continue;
+    }
+
+    if (from.toLowerCase() !== ownerLower) {
+      continue;
+    }
+
+    recipients.add(to.toLowerCase());
+  }
+
+  return [...recipients] as Address[];
+}
+
+export async function getProvenRecipients(owner: Address): Promise<Address[]> {
+  // Ask only for direct native sends, so the single page's budget is spent on
+  // the transfers that actually feed the reference set rather than being
+  // crowded out by ERC-20 logs on a busy wallet.
+  return provenRecipientsFromTransfers(
+    owner,
+    await requestTransfers({ fromAddress: owner }, { categories: ["external"] }),
+  );
 }
 
 export async function getActivity(

@@ -1,3 +1,5 @@
+import { truncateAddress } from "@/core/blockchain/addressFingerprint";
+
 import { BURN_ADDRESSES, HOLDER_RISK_THRESHOLDS } from "./constants";
 import { evidenceConflict, resolveEvidence, unknownEvidence } from "./evidence";
 import { reason, resultFromReasons } from "./risk";
@@ -286,7 +288,7 @@ function labelFor(
     return "Owner";
   }
 
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+  return truncateAddress(address);
 }
 
 function zeroLike(value: BalanceValue): BalanceValue {

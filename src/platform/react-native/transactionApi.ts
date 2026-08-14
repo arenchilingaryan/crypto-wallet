@@ -2,7 +2,7 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 import { keccak256, type Address, type Hash, type Hex } from "viem";
 
 import { erc20Abi } from "@/core/blockchain/erc20Abi";
-import { getApprovals } from "@/core/blockchain/getApprovals";
+import { scanApprovalGraph } from "@/core/blockchain/scanApprovalGraph";
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
 import { prepareErc20Revoke } from "@/core/transactions/prepareErc20Revoke";
 import { preparePermit2Revoke } from "@/core/transactions/preparePermit2Revoke";
@@ -27,8 +27,9 @@ import {
   type SwapAssetRef,
   type SwapIntent,
 } from "@/core/transactions/swap";
-import { walletEngine } from "./compositionRoot";
+import { keyValueStorage, walletEngine } from "./compositionRoot";
 
+import { approvalGraphChain } from "./approvalGraphChain";
 import { ethereumPublicClient } from "./ethereumPublicClient";
 
 type PrepareNativeTransferInput = {
@@ -624,15 +625,19 @@ export const transactionApi = {
       throw new Error("Active wallet not found");
     }
 
-    return getApprovals(
-      activeWallet.address,
+    return scanApprovalGraph({
+      owner: activeWallet.address,
 
       assets,
 
-      ACTIVE_NETWORK.id,
+      networkId: ACTIVE_NETWORK.id,
 
-      ethereumPublicClient,
-    );
+      client: ethereumPublicClient,
+
+      storage: keyValueStorage,
+
+      discovery: approvalGraphChain,
+    });
   },
 
   async prepareErc20Revoke({

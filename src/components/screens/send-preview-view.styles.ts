@@ -54,6 +54,38 @@ export const styles = StyleSheet.create({
     marginTop: Spacing.lg,
   },
 
+  intelNotice: {
+    marginTop: Spacing.lg,
+  },
+
+  lookalike: {
+    marginTop: Spacing.lg,
+
+    padding: Spacing.lg,
+
+    gap: Spacing.sm,
+
+    backgroundColor: Colors.surface,
+
+    borderWidth: 1,
+    borderColor: Colors.danger,
+    borderRadius: Radius.lg,
+  },
+
+  lookalikeAddress: {
+    marginTop: Spacing.xs,
+
+    padding: Spacing.sm,
+
+    backgroundColor: Colors.surfaceAlt,
+
+    borderRadius: Radius.sm,
+  },
+
+  confirmDanger: {
+    borderColor: Colors.danger,
+  },
+
   confirmButton: {
     minHeight: 52,
     marginTop: Spacing.xl,

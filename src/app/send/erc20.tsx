@@ -36,8 +36,10 @@ import {
 } from "@/core/transactions/tokenAmountInput";
 
 import { foldPolicyDecision } from "@/core/security/policyDecision";
+import type { RecipientIntelligence } from "@/core/security/recipientIntelligence";
 
 import { policyApi } from "@/platform/react-native/policyApi";
+import { recipientApi } from "@/platform/react-native/recipientApi";
 import { describePinFailure } from "@/core/security/pin";
 
 import { securityApi } from "@/platform/react-native/securityApi";
@@ -100,6 +102,9 @@ export default function SendErc20Screen() {
   const [amountUsd, setAmountUsd] = useState<number | null>(null);
 
   const [review, setReview] = useState<SecurityReview | null>(null);
+
+  const [recipientIntel, setRecipientIntel] =
+    useState<RecipientIntelligence | null>(null);
 
   const quoteRequestId = useRef(0);
 
@@ -174,6 +179,8 @@ export default function SendErc20Screen() {
     setQuote(null);
 
     setReview(null);
+
+    setRecipientIntel(null);
 
     if (!token) {
       return;
@@ -312,15 +319,31 @@ export default function SendErc20Screen() {
       setLoading(true);
       setError(null);
 
-      const verdict = await policyApi.check({
-        recipient: getAddress(recipient),
+      const [verdict, intel] = await Promise.all([
+        policyApi.check({
+          recipient: getAddress(recipient),
 
-        symbol: token.symbol,
+          symbol: token.symbol,
 
-        amount,
-      });
+          amount,
+        }),
+
+        recipientApi.analyze(getAddress(recipient)).catch((intelError) => {
+          console.error("Recipient analysis failed:", intelError);
+
+          // Fail honest, not silent: an unchecked recipient is surfaced as
+          // "unknown", never as an absent (implicitly fine) panel.
+          return {
+            identity: "unknown" as const,
+            historyCoverage: "unavailable" as const,
+            lookalike: null,
+          };
+        }),
+      ]);
 
       setReview(verdict.review);
+
+      setRecipientIntel(intel);
 
       const blocked = foldPolicyDecision(verdict.review.decision, {
         allow: () => null,
@@ -576,6 +599,7 @@ export default function SendErc20Screen() {
       <SendPreviewView
         preview={preview}
         review={review}
+        recipientIntelligence={recipientIntel}
         onBack={() => {
           setTransaction(null);
           setTransactionHash(null);

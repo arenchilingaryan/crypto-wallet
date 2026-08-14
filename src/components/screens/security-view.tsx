@@ -54,6 +54,10 @@ type SecurityViewProps = {
 };
 
 function formatAllowance(approval: TokenApproval) {
+  if (!approval.allowanceCertain) {
+    return "Unknown";
+  }
+
   if (approval.unlimited) {
     return "Unlimited";
   }
@@ -191,11 +195,28 @@ export function SecurityView({
         </View>
       )}
 
+      {scan && scan.coverage === "partial" && (
+        <View style={styles.summary}>
+          <AppText variant="overline" tone="danger">
+            Coverage: partial
+          </AppText>
+
+          <AppText variant="caption" tone="muted">
+            Some of your approval history could not be read just now, so this
+            list may be missing permissions. Treat it as incomplete, not as a
+            clean bill of health, and pull to refresh to try again.
+          </AppText>
+        </View>
+      )}
+
       <AppText variant="caption" tone="muted" style={styles.notice}>
         {scan
-          ? `Checked ${scan.checkedTokens} token${
-              scan.checkedTokens === 1 ? "" : "s"
-            } against ${scan.checkedSpenders} known spenders, direct and via Permit2.` +
+          ? "Direct approvals are found from your approval history and re-checked against their current on-chain allowance; Permit2 permissions are checked against the known routers." +
+            (scan.unknownSpenderCount > 0
+              ? ` ${scan.unknownSpenderCount} active permission${
+                  scan.unknownSpenderCount === 1 ? " is to a contract" : "s are to contracts"
+                } not on the known list.`
+              : "") +
             (scan.expiredCount > 0
               ? ` ${scan.expiredCount} expired permission${
                   scan.expiredCount === 1 ? "" : "s"
@@ -205,8 +226,7 @@ export function SecurityView({
               ? ` ${scan.uncertainCount} permission${
                   scan.uncertainCount === 1 ? " is" : "s are"
                 } shown without a dollar figure: its limit or price could not be read, so treat the amount as unknown rather than small.`
-              : "") +
-            " Permissions to contracts outside this list are not shown."
+              : "")
           : "Approvals let a contract move your tokens until you revoke them."}
       </AppText>
 
@@ -251,10 +271,16 @@ export function SecurityView({
 
       {!loading && !error && approvals.length === 0 && (
         <View style={styles.state}>
-          <AppText variant="bodyStrong">No active approvals</AppText>
+          <AppText variant="bodyStrong">
+            {scan?.coverage === "partial"
+              ? "No approvals confirmed yet"
+              : "No active approvals"}
+          </AppText>
 
           <AppText variant="caption" tone="muted">
-            None of the checked contracts can move your tokens.
+            {scan?.coverage === "partial"
+              ? "Nothing turned up in the history we could read, but that read was incomplete — this is not a guarantee that none exist."
+              : "None of the checked contracts can move your tokens."}
           </AppText>
         </View>
       )}
@@ -289,17 +315,27 @@ export function SecurityView({
               <View style={styles.approvalAmounts}>
                 <AppText
                   variant="bodyStrong"
-                  tone={approval.unlimited ? "warning" : "primary"}
+                  tone={
+                    !approval.allowanceCertain
+                      ? "danger"
+                      : approval.unlimited
+                        ? "warning"
+                        : "primary"
+                  }
                   tabular
                 >
                   {formatAllowance(approval)}
                 </AppText>
 
-                {approval.exposureUsd !== null && (
+                {!approval.allowanceCertain ? (
+                  <AppText variant="caption" tone="muted" tabular>
+                    allowance could not be read
+                  </AppText>
+                ) : approval.exposureUsd !== null ? (
                   <AppText variant="caption" tone="muted" tabular>
                     {formatUsd(approval.exposureUsd)} at risk
                   </AppText>
-                )}
+                ) : null}
               </View>
             </View>
 

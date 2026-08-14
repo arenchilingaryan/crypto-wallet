@@ -1,3 +1,5 @@
+import { truncateAddress } from "@/core/blockchain/addressFingerprint";
+
 const usdFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -26,7 +28,7 @@ export function formatTokenAmount(balance: string): string {
 }
 
 export function shortenAddress(address: string): string {
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+  return truncateAddress(address);
 }
 
 export function formatUsdCompact(value: number): string {

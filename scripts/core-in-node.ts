@@ -121,6 +121,26 @@ import {
   getApprovals,
   scoreApproval,
 } from "@/core/blockchain/getApprovals";
+import {
+  chunkRange,
+  computeCoverage,
+  extractCandidatePairs,
+  mergePairs,
+  parseDiscoveryState,
+  planScanRange,
+  scannedFrontier,
+  serializeDiscoveryState,
+  type ApprovalLogRecord,
+  type ScanRange,
+} from "@/core/blockchain/approvalDiscovery";
+import { scanApprovalGraph } from "@/core/blockchain/scanApprovalGraph";
+import { provenRecipientsFromTransfers } from "@/core/blockchain/getActivity";
+import {
+  addressFingerprint,
+  truncateAddress,
+} from "@/core/blockchain/addressFingerprint";
+import { analyzeRecipient } from "@/core/security/recipientIntelligence";
+import { shortenAddress } from "@/utils/format";
 import { normalizeTokenBalance } from "@/core/blockchain/getPortfolio";
 import { getKnownSpenders } from "@/core/blockchain/knownSpenders";
 import {
@@ -5657,6 +5677,688 @@ export async function main() {
       migratingMap.size === 1,
     "no window where the phrase exists nowhere durable",
   );
+
+  // ---- Permission Graph: event-based spender discovery ----------------------
+  //
+  // The scan must find spenders the known list never named, treat the current
+  // on-chain allowance as the only truth, resume incrementally after a reorg,
+  // and never dress up a half-read history as a clean result.
+  {
+    const DTOKEN = "0x1111111111111111111111111111111111111111" as Address;
+
+    const DTOKEN2 = "0x4444444444444444444444444444444444444444" as Address;
+
+    const DUNKNOWN = "0x2222222222222222222222222222222222222222" as Address;
+
+    const DROUTER = ROUTER as Address; // a known mainnet spender
+
+    const dOwner = generated.address;
+
+    const pairOf = (token: string, spender: string) =>
+      `${token.toLowerCase()}|${spender.toLowerCase()}`;
+
+    // A fake chain: fixed head, canned Approval logs per window, optional
+    // failure for a given window. Records every window it was asked to read.
+    const pgDiscovery = (config: {
+      latest: bigint;
+      logs?: (range: ScanRange) => ApprovalLogRecord[];
+      failOn?: (range: ScanRange) => boolean;
+    }) => {
+      const calls: ScanRange[] = [];
+
+      return {
+        calls,
+
+        async getLatestBlock() {
+          return config.latest;
+        },
+
+        async getApprovalLogs(_owner: Address, range: ScanRange) {
+          calls.push(range);
+
+          if (config.failOn?.(range)) {
+            throw new Error("rpc window unread");
+          }
+
+          return config.logs?.(range) ?? [];
+        },
+      };
+    };
+
+    // A fake allowance reader keyed by `${token}|${spender}` → bigint or "fail".
+    const pgClient = (byPair: Record<string, bigint | "fail">) =>
+      ({
+        async multicall({
+          contracts,
+        }: {
+          contracts: { address: string; args: readonly unknown[] }[];
+        }) {
+          return contracts.map((call) => {
+            const address = String(call.address).toLowerCase();
+
+            if (address === PERMIT2.toLowerCase()) {
+              return { status: "success" as const, result: [0n, 0, 0] as const };
+            }
+
+            const spender = String(call.args[1]).toLowerCase();
+
+            const value = byPair[`${address}|${spender}`];
+
+            if (value === "fail") {
+              return {
+                status: "failure" as const,
+                error: new Error("read fail"),
+              };
+            }
+
+            return { status: "success" as const, result: value ?? 0n };
+          });
+        },
+      }) as unknown as Parameters<typeof getApprovals>[3];
+
+    const discovered = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: 5n }),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({
+        latest: 1000n,
+        logs: () => [{ token: DTOKEN, spender: DUNKNOWN }],
+      }),
+    });
+
+    const unknownRow = discovered.approvals.find(
+      (row) => row.spender.toLowerCase() === DUNKNOWN.toLowerCase(),
+    );
+
+    check(
+      "an approval to a spender outside the known list is discovered from history and shown",
+      !!unknownRow && discovered.coverage === "complete",
+      unknownRow ? `found ${unknownRow.spenderName}` : "unknown spender missing",
+    );
+
+    check(
+      "a discovered unknown spender is scored on its real (unknown) identity, not assumed known",
+      unknownRow?.risk === "critical",
+      `risk ${unknownRow?.risk}`,
+    );
+
+    const knownDiscovered = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DROUTER)]: 5n }),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({
+        latest: 1000n,
+        logs: () => [{ token: DTOKEN, spender: DROUTER }],
+      }),
+    });
+
+    const knownRow = knownDiscovered.approvals.find(
+      (row) => row.spender.toLowerCase() === DROUTER.toLowerCase(),
+    );
+
+    check(
+      "a discovered spender that IS on the known list is labelled and scored as known, not critical",
+      knownRow?.spenderName !== "Unknown contract" && knownRow?.risk === "medium",
+      `name ${knownRow?.spenderName}, risk ${knownRow?.risk}`,
+    );
+
+    check(
+      "the scan counts how many active permissions are to unrecognised contracts",
+      discovered.unknownSpenderCount === 1 &&
+        knownDiscovered.unknownSpenderCount === 0,
+      `unknown counts ${discovered.unknownSpenderCount} / ${knownDiscovered.unknownSpenderCount}`,
+    );
+
+    const revoked = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: 0n }),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({
+        latest: 1000n,
+        logs: () => [{ token: DTOKEN, spender: DUNKNOWN }],
+      }),
+    });
+
+    check(
+      "an approval history shows but the chain now reports as zero is not an active permission",
+      revoked.approvals.every(
+        (row) => row.spender.toLowerCase() !== DUNKNOWN.toLowerCase(),
+      ),
+      `rows ${revoked.approvals.length}`,
+    );
+
+    const repeated = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: 5n }),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({
+        latest: 1000n,
+        logs: () => [
+          { token: DTOKEN, spender: DUNKNOWN },
+          { token: DTOKEN, spender: DUNKNOWN },
+          { token: DTOKEN, spender: DUNKNOWN },
+        ],
+      }),
+    });
+
+    check(
+      "the same spender approved many times is one current permission, not many",
+      repeated.approvals.filter(
+        (row) => row.spender.toLowerCase() === DUNKNOWN.toLowerCase(),
+      ).length === 1,
+      `rows ${repeated.approvals.length}`,
+    );
+
+    const unreadable = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: "fail" }),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({
+        latest: 1000n,
+        logs: () => [{ token: DTOKEN, spender: DUNKNOWN }],
+      }),
+    });
+
+    const uncertainRow = unreadable.approvals.find(
+      (row) => row.spender.toLowerCase() === DUNKNOWN.toLowerCase(),
+    );
+
+    check(
+      "a discovered permission whose current allowance cannot be read is shown as uncertain, never silently zero",
+      !!uncertainRow &&
+        uncertainRow.allowanceCertain === false &&
+        unreadable.uncertainCount >= 1,
+      uncertainRow
+        ? `certain=${uncertainRow.allowanceCertain}`
+        : "row dropped (silently zeroed)",
+    );
+
+    const halfDeadStorage = createMemoryStorage();
+
+    const halfDead = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({}),
+      storage: halfDeadStorage,
+      discovery: pgDiscovery({
+        latest: 1_500_000n,
+        failOn: (range) => range.fromBlock === 500_000n,
+      }),
+      chunkSize: 500_000n,
+    });
+
+    check(
+      "when a slice of history cannot be read the scan reports partial coverage, not a clean result",
+      halfDead.coverage === "partial",
+      `coverage ${halfDead.coverage}`,
+    );
+
+    const resumeAfterGap = pgDiscovery({ latest: 1_500_050n });
+
+    await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({}),
+      storage: halfDeadStorage,
+      discovery: resumeAfterGap,
+      chunkSize: 500_000n,
+    });
+
+    check(
+      "after a partial scan the next run resumes at the last fully-read block, retrying the gap not skipping it",
+      resumeAfterGap.calls[0]?.fromBlock === 499_999n - 12n,
+      `resumed from ${resumeAfterGap.calls[0]?.fromBlock}`,
+    );
+
+    const restartStorage = createMemoryStorage();
+
+    const firstScan = pgDiscovery({ latest: 1000n });
+
+    await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({}),
+      storage: restartStorage,
+      discovery: firstScan,
+    });
+
+    const secondScan = pgDiscovery({ latest: 1100n });
+
+    await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({}),
+      storage: restartStorage,
+      discovery: secondScan,
+    });
+
+    check(
+      "a first scan backfills from genesis; a later scan resumes incrementally instead of re-reading all history",
+      firstScan.calls[0]?.fromBlock === 0n &&
+        secondScan.calls[0]?.fromBlock === 1000n - 12n &&
+        secondScan.calls[0]?.fromBlock !== 0n,
+      `first ${firstScan.calls[0]?.fromBlock}, second ${secondScan.calls[0]?.fromBlock}`,
+    );
+
+    const reorgStorage = createMemoryStorage();
+
+    const seenAt995 = (range: ScanRange) =>
+      range.fromBlock <= 995n && 995n <= range.toBlock
+        ? [{ token: DTOKEN, spender: DUNKNOWN }]
+        : [];
+
+    await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: 5n }),
+      storage: reorgStorage,
+      discovery: pgDiscovery({ latest: 1000n, logs: seenAt995 }),
+    });
+
+    const afterReorg = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient({ [pairOf(DTOKEN, DUNKNOWN)]: 5n }),
+      storage: reorgStorage,
+      discovery: pgDiscovery({ latest: 1100n, logs: seenAt995 }),
+    });
+
+    check(
+      "re-reading an overlapping range after a reorg does not double a permission",
+      afterReorg.approvals.filter(
+        (row) => row.spender.toLowerCase() === DUNKNOWN.toLowerCase(),
+      ).length === 1,
+      `rows ${afterReorg.approvals.length}`,
+    );
+
+    const persisted = parseDiscoveryState(
+      await reorgStorage.get(
+        `permissiongraph.discovery.v1.${MAINNET}.${dOwner.toLowerCase()}`,
+      ),
+    );
+
+    check(
+      "the persisted candidate set stays deduped across runs",
+      persisted.pairs.length === 1,
+      `persisted pairs ${persisted.pairs.length}`,
+    );
+
+    const flood: ApprovalLogRecord[] = [];
+
+    const floodPairs: Record<string, bigint | "fail"> = {};
+
+    for (let i = 0; i < 50; i += 1) {
+      const spender = `0x${(i + 1).toString(16).padStart(40, "0")}` as Address;
+
+      flood.push({ token: DTOKEN, spender });
+
+      floodPairs[pairOf(DTOKEN, spender)] = 5n;
+    }
+
+    const flooded = await scanApprovalGraph({
+      owner: dOwner,
+      assets: [],
+      networkId: MAINNET,
+      client: pgClient(floodPairs),
+      storage: createMemoryStorage(),
+      discovery: pgDiscovery({ latest: 1000n, logs: () => flood }),
+    });
+
+    check(
+      "a token spamming forged approvals is capped per token and flagged partial, not silently trusted whole",
+      flooded.approvals.filter(
+        (row) => row.token.toLowerCase() === DTOKEN.toLowerCase(),
+      ).length === 20 && flooded.coverage === "partial",
+      `rows ${flooded.approvals.length}, coverage ${flooded.coverage}`,
+    );
+
+    check(
+      "range planning: never-scanned backfills genesis→head; a scanned wallet resumes behind the frontier by the reorg overlap",
+      (() => {
+        const fresh = planScanRange({
+          lastScannedBlock: null,
+          latestBlock: 5000n,
+          reorgOverlap: 12n,
+        });
+
+        const resumed = planScanRange({
+          lastScannedBlock: 4000n,
+          latestBlock: 5000n,
+          reorgOverlap: 12n,
+        });
+
+        const rewound = planScanRange({
+          lastScannedBlock: 6000n,
+          latestBlock: 5000n,
+          reorgOverlap: 12n,
+        });
+
+        const impossible = planScanRange({
+          lastScannedBlock: null,
+          latestBlock: -1n,
+          reorgOverlap: 12n,
+        });
+
+        return (
+          fresh?.fromBlock === 0n &&
+          fresh?.toBlock === 5000n &&
+          resumed?.fromBlock === 3988n &&
+          rewound?.fromBlock === 4988n &&
+          impossible === null
+        );
+      })(),
+      "planScanRange handles fresh, incremental, reorg-rewound and impossible heads",
+    );
+
+    check(
+      "chunking splits a range into gap-free windows and clamps the last one",
+      (() => {
+        const chunks = chunkRange({ fromBlock: 0n, toBlock: 1200n }, 500n);
+
+        return (
+          chunks.length === 3 &&
+          chunks[0].toBlock === 499n &&
+          chunks[1].fromBlock === 500n &&
+          chunks[2].fromBlock === 1000n &&
+          chunks[2].toBlock === 1200n
+        );
+      })(),
+      "chunkRange covers the whole range with no gaps or overlaps",
+    );
+
+    check(
+      "candidate extraction dedupes and merging unions across sources, dropping malformed pairs",
+      (() => {
+        const extracted = extractCandidatePairs([
+          { token: DTOKEN, spender: DUNKNOWN },
+          { token: DTOKEN, spender: DUNKNOWN },
+          { token: DTOKEN2, spender: DUNKNOWN },
+        ]);
+
+        const merged = mergePairs(
+          [{ token: DTOKEN, spender: DUNKNOWN }],
+          [
+            { token: DTOKEN, spender: DUNKNOWN },
+            { token: DTOKEN2, spender: DROUTER },
+          ],
+          [{ token: "not-an-address" as Address, spender: DUNKNOWN }],
+        );
+
+        return extracted.length === 2 && merged.length === 2;
+      })(),
+      "one pair per (token, spender); junk is discarded",
+    );
+
+    check(
+      "coverage and frontier: a failed window makes coverage partial and stops the frontier before the gap",
+      (() => {
+        const outcomes = [
+          { range: { fromBlock: 0n, toBlock: 99n }, ok: true },
+          { range: { fromBlock: 100n, toBlock: 199n }, ok: false },
+          { range: { fromBlock: 200n, toBlock: 299n }, ok: true },
+        ];
+
+        const allOk = [
+          { range: { fromBlock: 0n, toBlock: 99n }, ok: true },
+          { range: { fromBlock: 100n, toBlock: 199n }, ok: true },
+        ];
+
+        return (
+          computeCoverage(outcomes) === "partial" &&
+          computeCoverage(allOk) === "complete" &&
+          computeCoverage(allOk, false) === "partial" &&
+          scannedFrontier(outcomes, null) === 99n &&
+          scannedFrontier(allOk, null) === 199n
+        );
+      })(),
+      "partial history is never reported as complete; the frontier never jumps a gap",
+    );
+
+    check(
+      "discovery state survives a round trip and a corrupt blob resets to a full backfill",
+      (() => {
+        const round = parseDiscoveryState(
+          serializeDiscoveryState({
+            lastScannedBlock: 12345n,
+            pairs: [{ token: DTOKEN, spender: DUNKNOWN }],
+          }),
+        );
+
+        const corrupt = parseDiscoveryState("{ not json");
+
+        const wrongVersion = parseDiscoveryState(
+          JSON.stringify({ version: 999, lastScannedBlock: "5", pairs: [] }),
+        );
+
+        return (
+          round.lastScannedBlock === 12345n &&
+          round.pairs.length === 1 &&
+          corrupt.lastScannedBlock === null &&
+          corrupt.pairs.length === 0 &&
+          wrongVersion.lastScannedBlock === null
+        );
+      })(),
+      "persisted state is either fully trusted or treated as never-scanned",
+    );
+  }
+
+  // ---- Recipient Intelligence: address poisoning ----------------------------
+  //
+  // Familiarity and visual confusion are independent axes. The reference set is
+  // proven sends only; "first-time" is claimed only under complete history; a
+  // used address still warns when a different used address shares its shortened
+  // form; and the shape the detector compares is the shape the user reads.
+  {
+    const OWN = "0x1234567890123456789012345678901234567890" as Address;
+
+    const Y = ("0x71f2" + "0".repeat(32) + "9a4c") as Address; // real recipient
+
+    const X = ("0x71f2" + "1".repeat(32) + "9a4c") as Address; // lookalike of Y
+
+    const Y2 = ("0x71f2" + "2".repeat(32) + "9a4c") as Address; // another twin
+
+    const Z = ("0x9999" + "0".repeat(32) + "1111") as Address; // unrelated
+
+    // THE adversarial test: the lookalike arrived as inbound dust, so it is not
+    // in the proven-send set. It must warn, and must never be called known.
+    const dust = analyzeRecipient({
+      recipient: X,
+      ownAddress: OWN,
+      provenRecipients: [Y],
+      historyCoverage: "partial",
+    });
+
+    check(
+      "an inbound-dust lookalike is flagged and never treated as a known recipient",
+      dust.identity !== "previously-sent" &&
+        dust.lookalike !== null &&
+        dust.lookalike.matches.some((m) => m.toLowerCase() === Y.toLowerCase()),
+      `identity ${dust.identity}, matches ${dust.lookalike?.matches.length ?? 0}`,
+    );
+
+    const refset = provenRecipientsFromTransfers(OWN, [
+      { category: "external", from: OWN, to: Y }, // real send → Y
+      { category: "external", from: X, to: OWN }, // inbound dust FROM lookalike → excluded
+      { category: "erc20", from: OWN, to: Z }, // erc-20 log → intent unproven → excluded
+    ]);
+
+    check(
+      "the proven-recipient set is built from outgoing native sends only, never from who paid you",
+      refset.length === 1 && refset[0].toLowerCase() === Y.toLowerCase(),
+      `recipients [${refset.join(", ")}]`,
+    );
+
+    const exact = analyzeRecipient({
+      recipient: Y,
+      ownAddress: OWN,
+      provenRecipients: [Y],
+      historyCoverage: "complete",
+    });
+
+    check(
+      "an address we have provably sent to is previously-sent, with no false lookalike",
+      exact.identity === "previously-sent" && exact.lookalike === null,
+      `identity ${exact.identity}, lookalike ${exact.lookalike ? "yes" : "no"}`,
+    );
+
+    const cased = analyzeRecipient({
+      recipient: ("0x71F2" + "0".repeat(32) + "9A4C") as Address,
+      ownAddress: OWN,
+      provenRecipients: [Y],
+      historyCoverage: "complete",
+    });
+
+    check(
+      "recipient identity ignores address casing",
+      cased.identity === "previously-sent",
+      `identity ${cased.identity}`,
+    );
+
+    const partial = analyzeRecipient({
+      recipient: Z,
+      ownAddress: OWN,
+      provenRecipients: [Y],
+      historyCoverage: "partial",
+    });
+
+    const complete = analyzeRecipient({
+      recipient: Z,
+      ownAddress: OWN,
+      provenRecipients: [Y],
+      historyCoverage: "complete",
+    });
+
+    check(
+      "with partial history an unseen address is not-seen, not falsely declared first-time",
+      partial.identity === "not-seen" && complete.identity === "first-time",
+      `partial ${partial.identity}, complete ${complete.identity}`,
+    );
+
+    const unavailable = analyzeRecipient({
+      recipient: Z,
+      ownAddress: OWN,
+      provenRecipients: [],
+      historyCoverage: "unavailable",
+    });
+
+    check(
+      "when history could not be read an unfamiliar address is unknown, never first-time",
+      unavailable.identity === "unknown",
+      `identity ${unavailable.identity}`,
+    );
+
+    const both = analyzeRecipient({
+      recipient: Y,
+      ownAddress: OWN,
+      provenRecipients: [Y, Y2], // Y2 shares Y's shortened form
+      historyCoverage: "complete",
+    });
+
+    check(
+      "a previously-sent address still warns when a different used address shares its shortened form",
+      both.identity === "previously-sent" &&
+        both.lookalike !== null &&
+        both.lookalike.matches.some((m) => m.toLowerCase() === Y2.toLowerCase()),
+      `identity ${both.identity}, lookalike ${both.lookalike ? "yes" : "no"}`,
+    );
+
+    const multi = analyzeRecipient({
+      recipient: X,
+      ownAddress: OWN,
+      provenRecipients: [Y, Y2],
+      historyCoverage: "partial",
+    });
+
+    check(
+      "all historical addresses sharing the fingerprint are returned, in order",
+      multi.lookalike?.matches.length === 2 &&
+        multi.lookalike.matches[0].toLowerCase() === Y.toLowerCase() &&
+        multi.lookalike.matches[1].toLowerCase() === Y2.toLowerCase(),
+      `matches ${multi.lookalike?.matches.length ?? 0}`,
+    );
+
+    check(
+      "the address the user reads is exactly the shape the detector compares",
+      shortenAddress(X) === truncateAddress(X) &&
+        addressFingerprint(X) === shortenAddress(X).toLowerCase() &&
+        addressFingerprint(X) === addressFingerprint(Y) &&
+        X.toLowerCase() !== Y.toLowerCase(),
+      `fingerprint ${addressFingerprint(X)}`,
+    );
+
+    // A degenerate short string must not collapse under overlapping head/tail
+    // slices into a false fingerprint collision.
+    check(
+      "the fingerprint of a too-short string is the string itself, not an overlapping collision",
+      truncateAddress("0xabcd") === "0xabcd" &&
+        addressFingerprint("0xabcd") !== addressFingerprint(X) &&
+        truncateAddress(X).includes("…"),
+      `short ${truncateAddress("0xabcd")}`,
+    );
+
+    // Firewall and recipient-intelligence must agree on "known": a confirmed
+    // approve/swap names a token/router contract, not a chosen recipient, so it
+    // must not enter knownRecipients.
+    const ROUTER = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45" as Address;
+
+    const nowMs = Date.now();
+
+    const trackedForContext = [
+      {
+        assetType: "native",
+        from: OWN,
+        to: Y,
+        status: "confirmed",
+        createdAt: nowMs,
+        valueUsd: 0,
+        valueWei: "0",
+        tokenDecimals: 18,
+        symbol: "ETH",
+      },
+      {
+        assetType: "swap",
+        from: OWN,
+        to: ROUTER,
+        status: "confirmed",
+        createdAt: nowMs,
+        valueUsd: 0,
+        valueWei: "0",
+        tokenDecimals: 18,
+        symbol: "ETH",
+      },
+    ] as unknown as Parameters<typeof buildPolicyContext>[0]["tracked"];
+
+    const knownCtx = buildPolicyContext({
+      owner: OWN,
+      activity: [],
+      tracked: trackedForContext,
+      priceOf: () => null,
+      now: nowMs,
+    });
+
+    check(
+      "a swap's router is never counted as a known recipient, but a real transfer's recipient is",
+      knownCtx.knownRecipients.includes(Y.toLowerCase()) &&
+        !knownCtx.knownRecipients.includes(ROUTER.toLowerCase()),
+      `known [${knownCtx.knownRecipients.join(", ")}]`,
+    );
+  }
 
   console.log(
     failed === 0
