@@ -1,3 +1,4 @@
+import { assertSaneFee } from "./feeGuard";
 import { getAddress, isAddress, zeroAddress, type Address } from "viem";
 
 export type NativeTransferIntent = {
@@ -213,6 +214,8 @@ export function validatePreparedNativeTransferForSigning(
       "Priority fee cannot exceed maximum fee",
     );
   }
+
+  assertSaneFee(transaction);
 
   if (transaction.data !== "0x") {
     throw new TransactionValidationError(

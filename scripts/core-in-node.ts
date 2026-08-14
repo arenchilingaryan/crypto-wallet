@@ -17,6 +17,7 @@ import type {
 } from "@/core/ports/walletSigner";
 
 import { TransactionValidationError } from "@/core/transactions/nativeTransfer";
+import { assertSaneFee } from "@/core/transactions/feeGuard";
 
 import { confirmMnemonic } from "@/core/wallet/confirmMnemonic";
 import {
@@ -189,6 +190,7 @@ function createMemorySecretStore(): SecretStore {
 
     async save(walletId, secret) {
       map.set(walletId, secret);
+      return { durable: true };
     },
 
     async remove(walletId) {
@@ -407,6 +409,77 @@ export async function main() {
     "signNativeTransfer through the port",
     rawTransaction.startsWith("0x02"),
     `${rawTransaction.slice(0, 14)}…`,
+  );
+
+  const GWEI = 1_000_000_000n;
+
+  function feeRejected(
+    maxFeePerGas: bigint,
+    maxPriorityFeePerGas: bigint,
+    gas = 21_000n,
+  ) {
+    try {
+      assertSaneFee({ gas, maxFeePerGas, maxPriorityFeePerGas });
+
+      return null;
+    } catch (error) {
+      return error instanceof TransactionValidationError ? error.code : "other";
+    }
+  }
+
+  check(
+    "a priority fee large enough to drain the balance as a tip is refused",
+    feeRejected(6000n * GWEI, 6000n * GWEI) === "INVALID_PRIORITY_FEE",
+    "a hostile RPC cannot make the wallet sign away its ETH as a priority tip",
+  );
+
+  check(
+    "an absurd maximum fee per gas is refused even with a zero tip",
+    feeRejected(50_000n * GWEI, 0n) === "INVALID_MAX_FEE",
+    "no real gas price approaches this ceiling",
+  );
+
+  check(
+    "a gas limit above the block gas limit is refused",
+    feeRejected(80n * GWEI, 2n * GWEI, 40_000_000n) === "INVALID_GAS",
+    "a hostile RPC cannot inflate the fee or block sends with an impossible gas limit",
+  );
+
+  check(
+    "an ordinary fee still passes the guard untouched",
+    feeRejected(80n * GWEI, 2n * GWEI, 150_000n) === null,
+    "the ceiling sits far above any real gas price",
+  );
+
+  const drainingTransfer = {
+    ...prepared,
+    maxPriorityFeePerGas: 6000n * GWEI,
+    maxFeePerGas: 6000n * GWEI,
+  };
+
+  grantTransactionAuthorization(drainingTransfer, "draining-transfer");
+
+  let drainingSignRejected = false;
+
+  try {
+    await signNativeTransfer(
+      {
+        transaction: drainingTransfer,
+        authorization: "draining-transfer",
+        expectedChainId: 1,
+      },
+      signer,
+    );
+  } catch (error) {
+    drainingSignRejected =
+      error instanceof TransactionValidationError &&
+      error.code === "INVALID_PRIORITY_FEE";
+  }
+
+  check(
+    "the signing path itself refuses a draining fee, not just the standalone guard",
+    drainingSignRejected,
+    "removing the fee guard from the transfer validator would let this through",
   );
 
   const otherStorage = createMemoryStorage();
@@ -1694,6 +1767,7 @@ export async function main() {
         async save(walletId, secret) {
           bump();
           sec.set(walletId, secret);
+          return { durable: true };
         },
         async remove(walletId) {
           bump();
@@ -2820,6 +2894,7 @@ export async function main() {
             )
           : JSON.stringify(secret),
       );
+      return { durable: true };
     },
 
     async remove(walletId) {
@@ -5529,6 +5604,58 @@ export async function main() {
     "an approval never gets a swap execution report attached to it",
     approveExecution === null,
     "quote, floor, received and execution price belong to the trade, not to the permission",
+  );
+
+  const legacyStore = createMemoryStorage();
+
+  const legacyPhrase = generated.mnemonic;
+
+  await legacyStore.set("wallet.mnemonic.v1", legacyPhrase);
+
+  const migratingMap = new Map<string, WalletSecret>();
+
+  let vaultIsOpen = false;
+
+  const migratingSecrets: SecretStore = {
+    async load(walletId) {
+      return migratingMap.get(walletId) ?? null;
+    },
+
+    async save(walletId, secret) {
+      migratingMap.set(walletId, secret);
+
+      return { durable: vaultIsOpen };
+    },
+
+    async remove(walletId) {
+      migratingMap.delete(walletId);
+    },
+  };
+
+  const legacyEngine = createWalletEngine({
+    storage: legacyStore,
+    secrets: migratingSecrets,
+    random: nodeRandom,
+  });
+
+  await legacyEngine.initialize();
+
+  check(
+    "a legacy wallet keeps its only durable copy of the phrase until the vault can seal it",
+    (await legacyStore.get("wallet.mnemonic.v1")) === legacyPhrase &&
+      (await legacyEngine.list()).length === 1,
+    "before the PIN is set, the plaintext legacy copy is the only durable source and is not deleted",
+  );
+
+  vaultIsOpen = true;
+
+  await legacyEngine.finishLegacyMigration();
+
+  check(
+    "once the vault is open the phrase is sealed and only then is the plaintext copy removed",
+    (await legacyStore.get("wallet.mnemonic.v1")) === null &&
+      migratingMap.size === 1,
+    "no window where the phrase exists nowhere durable",
   );
 
   console.log(

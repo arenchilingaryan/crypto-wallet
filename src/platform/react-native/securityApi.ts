@@ -19,6 +19,7 @@ import { createPin, hasPin, verifyPin } from "@/core/security/pin";
 import { expoRandomSource } from "./expoRandomSource";
 import { expoKeyValueStorage } from "./keyValueStorage";
 import { outflowGuardApi } from "./outflowGuardApi";
+import { clearAllPendingSecrets } from "./pendingSecrets";
 import { policyApi } from "./policyApi";
 import type { TimingReporter } from "./timings";
 import { clearUnlockMaterial } from "./unlockMaterial";
@@ -170,6 +171,7 @@ export const securityApi = {
   lock() {
     clearTransactionAuthorization();
     clearUnlockMaterial();
+    clearAllPendingSecrets();
     lockSession();
   },
 

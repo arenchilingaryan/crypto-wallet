@@ -1,3 +1,4 @@
+import { assertSaneFee } from "./feeGuard";
 import {
   encodeFunctionData,
   getAddress,
@@ -310,6 +311,8 @@ export function validatePreparedErc20TransferForSigning(
       "Priority fee cannot exceed maximum fee",
     );
   }
+
+  assertSaneFee(transaction);
 
   return Object.freeze({
     kind: "erc20-transfer",

@@ -1,3 +1,4 @@
+import { assertSaneFee } from "./feeGuard";
 import {
   getAddress,
   isAddress,
@@ -400,6 +401,8 @@ export function validatePreparedSwapForSigning(
       "Priority fee cannot exceed maximum fee",
     );
   }
+
+  assertSaneFee(transaction);
 
   return Object.freeze({
     ...validatedIntent,

@@ -51,6 +51,8 @@ export interface WalletEngine {
 
   prepare(): Promise<{ recoveryPhrase: string; address: Address }>;
 
+  finishLegacyMigration(): Promise<void>;
+
   create(recoveryPhrase: string): Promise<WalletAccount>;
 
   importFromMnemonic(mnemonic: string): Promise<WalletAccount>;
@@ -202,7 +204,10 @@ export function createWalletEngine({
       after: fingerprintRegistry(migrated),
     });
 
-    await secrets.save(walletId, createWalletSecret(mnemonic));
+    const { durable } = await secrets.save(
+      walletId,
+      createWalletSecret(mnemonic),
+    );
 
     if (!wallets.some((wallet) => wallet.id === walletId)) {
       await writeRegistry([
@@ -223,7 +228,9 @@ export function createWalletEngine({
       await storage.set(WALLET_STORAGE_KEYS.activeWalletId, walletId);
     }
 
-    await storage.remove(WALLET_STORAGE_KEYS.legacyMnemonic);
+    if (durable) {
+      await storage.remove(WALLET_STORAGE_KEYS.legacyMnemonic);
+    }
 
     await clearJournal();
   }
@@ -483,6 +490,10 @@ export function createWalletEngine({
 
         address: generated.address,
       };
+    },
+
+    async finishLegacyMigration() {
+      await serialize(() => migrateLegacyWallet());
     },
 
     async create(recoveryPhrase: string) {

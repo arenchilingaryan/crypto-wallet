@@ -19,6 +19,7 @@ import { walletEngine } from "./compositionRoot";
 import { getDeviceKey, hasDeviceKey } from "./deviceKey";
 import { expoKeyValueStorage } from "./keyValueStorage";
 import { expoRandomSource } from "./expoRandomSource";
+import { pendingSecretEntries } from "./pendingSecrets";
 import { expoSecretStore } from "./secretStore";
 import { getUnlockMaterial, setUnlockMaterial } from "./unlockMaterial";
 
@@ -91,7 +92,25 @@ export async function adoptPin(pin: string): Promise<boolean> {
 
   setUnlockMaterial(masterKey);
 
+  await flushPendingSecrets();
+
   return true;
+}
+
+async function flushPendingSecrets(): Promise<void> {
+  for (const [walletId, secret] of pendingSecretEntries()) {
+    try {
+      await expoSecretStore.save(walletId, secret);
+    } catch (error) {
+      console.error(`Could not seal wallet ${walletId} on unlock:`, error);
+    }
+  }
+
+  try {
+    await walletEngine.finishLegacyMigration();
+  } catch (error) {
+    console.error("Could not finish the legacy wallet migration:", error);
+  }
 }
 
 export async function sealEveryWallet(): Promise<void> {

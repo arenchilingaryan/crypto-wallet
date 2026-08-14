@@ -1,3 +1,4 @@
+import { assertSaneFee } from "./feeGuard";
 import { getAddress, isAddress, zeroAddress, type Address, type Hex } from "viem";
 
 import { encodeErc20Approve } from "./erc20Approve";
@@ -211,6 +212,8 @@ export function validatePreparedErc20RevokeForSigning(
       "Priority fee cannot exceed maximum fee",
     );
   }
+
+  assertSaneFee(transaction);
 
   return Object.freeze({
     ...validatedIntent,

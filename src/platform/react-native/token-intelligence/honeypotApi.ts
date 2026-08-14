@@ -1,3 +1,5 @@
+const MAX_HONEYPOT_FLAGS = 100;
+
 import {
   UNKNOWN,
   type NormalizedHoneypotHolder,
@@ -141,7 +143,7 @@ function normalizeSummaryFlags(
       return [];
     }
 
-    return flags.flatMap((entry) => {
+    return flags.slice(0, MAX_HONEYPOT_FLAGS).flatMap((entry) => {
       const flag = normalizeFlag(entry);
 
       return flag ? [flag] : [];
@@ -156,7 +158,7 @@ function normalizeSummaryFlags(
     return [];
   }
 
-  return legacyFlagsValue.flatMap((entry) => {
+  return legacyFlagsValue.slice(0, MAX_HONEYPOT_FLAGS).flatMap((entry) => {
     const flag = normalizeFlag(entry);
 
     return flag ? [flag] : [];

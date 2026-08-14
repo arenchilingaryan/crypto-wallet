@@ -2,7 +2,6 @@ import type { SecretStore } from "@/core/ports/secretStore";
 import {
   createWalletSecret,
   parseWalletSecret,
-  serializeWalletSecret,
   type WalletSecret,
 } from "@/core/wallet/walletSecret";
 import {
@@ -12,19 +11,22 @@ import {
 } from "@/core/wallet/walletVault";
 
 import { expoRandomSource } from "./expoRandomSource";
+import {
+  clearPendingSecret,
+  peekPendingSecret,
+  stagePendingSecret,
+} from "./pendingSecrets";
 import { getUnlockMaterial } from "./unlockMaterial";
 
 function getSecretKey(walletId: string) {
   return `wallet.secret.${walletId}`;
 }
 
-async function toStoredValue(walletId: string, secret: WalletSecret) {
-  const masterKey = getUnlockMaterial();
-
-  if (!masterKey) {
-    return serializeWalletSecret(secret);
-  }
-
+async function sealForStorage(
+  walletId: string,
+  secret: WalletSecret,
+  masterKey: Uint8Array,
+) {
   const [wrapNonce, nonce, dek] = await Promise.all([
     expoRandomSource.getBytes(24),
     expoRandomSource.getBytes(24),
@@ -45,6 +47,12 @@ async function toStoredValue(walletId: string, secret: WalletSecret) {
 
 export const expoSecretStore = {
   async load(walletId: string): Promise<WalletSecret | null> {
+    const staged = peekPendingSecret(walletId);
+
+    if (staged) {
+      return staged;
+    }
+
     const raw = localStorage.getItem(getSecretKey(walletId));
 
     if (!raw) {
@@ -77,10 +85,22 @@ export const expoSecretStore = {
   },
 
   async save(walletId: string, secret: WalletSecret) {
+    const masterKey = getUnlockMaterial();
+
+    if (!masterKey) {
+      stagePendingSecret(walletId, secret);
+
+      return { durable: false };
+    }
+
     localStorage.setItem(
       getSecretKey(walletId),
-      await toStoredValue(walletId, secret),
+      await sealForStorage(walletId, secret, masterKey),
     );
+
+    clearPendingSecret(walletId);
+
+    return { durable: true };
   },
 
   async peek(walletId: string): Promise<string | null> {
@@ -88,6 +108,8 @@ export const expoSecretStore = {
   },
 
   async remove(walletId: string) {
+    clearPendingSecret(walletId);
+
     localStorage.removeItem(getSecretKey(walletId));
   },
 } satisfies SecretStore & { peek(walletId: string): Promise<string | null> };

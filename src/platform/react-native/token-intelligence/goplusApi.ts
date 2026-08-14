@@ -61,7 +61,7 @@ function normalizeLockedDetails(value: unknown): readonly NormalizedLockDetail[]
     return invalidGoPlusResponse("GoPlus returned malformed lock details");
   }
 
-  return value.map((entry) => {
+  return value.slice(0, MAX_GOPLUS_LOCK_DETAILS).map((entry) => {
     const record = asRecord(entry);
 
     if (!record) {
@@ -96,6 +96,10 @@ function normalizeGoPlusHolder(
     lockedDetails: normalizeLockedDetails(own(record, "locked_detail")),
   };
 }
+
+const MAX_GOPLUS_POOLS = 100;
+
+const MAX_GOPLUS_LOCK_DETAILS = 50;
 
 function normalizeGoPlusHolders(
   value: unknown,
@@ -167,7 +171,7 @@ function normalizeGoPlusPools(
     return invalidGoPlusResponse("GoPlus returned malformed liquidity data");
   }
 
-  return value.map(normalizeGoPlusPool);
+  return value.slice(0, MAX_GOPLUS_POOLS).map(normalizeGoPlusPool);
 }
 
 function findTokenRecord(
