@@ -136,14 +136,12 @@ export async function scanApprovalGraph({
     discoveryReachedChain = false;
   }
 
-  // The candidate set is everything ever discovered plus what we just found.
-  // It is never pruned on a scan: a pair leaves the graph only when its current
-  // allowance reads zero, checked every run — a finite allowance can be spent
-  // down to zero through use without emitting any new event. It is bounded so a
-  // token spamming forged Approval events cannot grow it without limit; hitting
-  // the bound forces partial coverage rather than a silent drop.
+  // Put this run's evidence before persisted candidates so a saturated legacy
+  // cache cannot hide a newly created live approval behind stale zero entries.
+  // The set remains bounded; hitting the bound forces partial coverage rather
+  // than a silent claim that discovery was complete.
   const { pairs: allPairs, truncated } = capPairs(
-    mergePairs(prior.pairs, discoveredPairs),
+    mergePairs(discoveredPairs, prior.pairs),
   );
 
   const held = new Set(
@@ -176,7 +174,9 @@ export async function scanApprovalGraph({
   const nextState = {
     lastScannedBlock: discoveryReachedChain ? frontier : prior.lastScannedBlock,
 
-    pairs: allPairs,
+    // Current allowance is authoritative: keep live and unreadable candidates,
+    // but do not let confirmed-zero history permanently consume the cap.
+    pairs: [...(scan.retainedDirectPairs ?? allPairs)],
   };
 
   try {

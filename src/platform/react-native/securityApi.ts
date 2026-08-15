@@ -15,6 +15,7 @@ import {
 } from "@/core/security/transactionAuthorization";
 
 import { createPin, hasPin, verifyPin } from "@/core/security/pin";
+import { reducesExposureOnly } from "@/core/security/exposureIntent";
 
 import { expoRandomSource } from "./expoRandomSource";
 import { expoKeyValueStorage } from "./keyValueStorage";
@@ -73,9 +74,26 @@ export const securityApi = {
 
     let reservationId: string | null = null;
 
-    if (outflow) {
-      const policy = await policyApi.load();
+    // The review that got us here read a policy that may since have become
+    // unreadable. This is the last gate before signing is authorized, and it
+    // covers approvals and swaps too — they carry no outflow hold, so putting
+    // this inside the `outflow` branch would leave them unchecked. Revokes
+    // pass, for the same reason decidePolicy lets them through.
+    const policy = await policyApi.load();
 
+    if (
+      policy.availability === "unavailable" &&
+      !reducesExposureOnly(transaction.kind)
+    ) {
+      return {
+        ok: false as const,
+        reason: "outflow-reserved" as const,
+        message:
+          "Your saved transaction limits could not be read, so this cannot be checked against them. Open Transaction limits, set them again, and try once more.",
+      };
+    }
+
+    if (outflow) {
       const hold = await outflowGuardApi.hold({
         id: authorization,
 

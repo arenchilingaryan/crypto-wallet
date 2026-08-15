@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { goBack } from "@/utils/navigation";
 
 import { useRouter } from "expo-router";
 
@@ -131,7 +132,7 @@ export default function SendAssetPickerScreen() {
       error={error}
       onChangeQuery={setQuery}
       onBack={() => {
-        router.back();
+        goBack("/");
       }}
       onSelect={(asset) => {
         if (asset.type === "native") {

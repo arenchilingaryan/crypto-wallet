@@ -1,7 +1,14 @@
+// What the chain actually told us about a transaction we broadcast (or tried
+// to). "not-found" is a positive answer from a reachable node; "unknown" is the
+// absence of an answer. Collapsing the two lets a provider outage look like
+// proof that a transaction was replaced, which is how a still-valid outflow
+// gets terminalised and silently drops out of daily accounting.
+export type TransactionPresence = "seen" | "not-found" | "unknown";
+
 export type BroadcastObservation = {
   receipt: "success" | "reverted" | null;
 
-  transactionSeen: boolean;
+  presence: TransactionPresence;
 
   accountNonce: number | null;
 
@@ -28,8 +35,15 @@ export function resolveBroadcast(
     };
   }
 
-  if (observation.transactionSeen) {
+  if (observation.presence === "seen") {
     return { action: "mark-pending" };
+  }
+
+  // We could not reach the node, or it answered with something we cannot
+  // interpret. Nothing here is evidence about the transaction, so no terminal
+  // state and no resend: wait and ask again later.
+  if (observation.presence === "unknown") {
+    return { action: "wait" };
   }
 
   const { accountNonce, txNonce } = observation;

@@ -37,7 +37,7 @@ export const Networks = {
   },
 } as const satisfies Record<string, AppNetwork>;
 
-export const ACTIVE_NETWORK = Networks.ethereum;
+export const ACTIVE_NETWORK = Networks.sepolia;
 
 export function isTestnetNetwork(networkId: string) {
   return Object.values(Networks).some(

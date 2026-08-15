@@ -27,14 +27,39 @@ import {
   type SwapAssetRef,
   type SwapIntent,
 } from "@/core/transactions/swap";
+import {
+  assertSameWalletIdentity,
+  type WalletIdentity,
+} from "@/core/wallet/walletIdentity";
 import { keyValueStorage, walletEngine } from "./compositionRoot";
 
 import { approvalGraphChain } from "./approvalGraphChain";
 import { ethereumPublicClient } from "./ethereumPublicClient";
 
-type PrepareNativeTransferInput = {
+// Everything that turns an approved review into signable bytes goes through
+// here. The caller names the wallet its review was about; if the active wallet
+// is no longer that one, nothing is prepared.
+async function activeWalletMatching(expectedWallet: WalletIdentity) {
+  const activeWallet = await walletEngine.getActive();
+
+  if (!activeWallet) {
+    throw new Error("Active wallet not found");
+  }
+
+  assertSameWalletIdentity(expectedWallet, activeWallet);
+
+  return activeWallet;
+}
+
+// Quoting only reads gas and balances; it signs nothing and commits nothing,
+// so it does not carry a reviewed wallet.
+type QuoteNativeTransferInput = {
   to: Address;
   value: bigint;
+};
+
+type PrepareNativeTransferInput = QuoteNativeTransferInput & {
+  expectedWallet: WalletIdentity;
 };
 
 type Erc20TransferInput = {
@@ -47,6 +72,8 @@ type Erc20TransferInput = {
   tokenSymbol: string;
 
   tokenDecimals: number;
+
+  expectedWallet: WalletIdentity;
 };
 
 export type Erc20TransferQuote = {
@@ -136,7 +163,7 @@ export const transactionApi = {
   async quoteNativeTransfer({
     to,
     value,
-  }: PrepareNativeTransferInput): Promise<NativeTransferQuote> {
+  }: QuoteNativeTransferInput): Promise<NativeTransferQuote> {
     const activeWallet = await walletEngine.getActive();
 
     if (!activeWallet) {
@@ -235,12 +262,12 @@ export const transactionApi = {
     });
   },
 
-  async prepareNativeTransfer({ to, value }: PrepareNativeTransferInput) {
-    const activeWallet = await walletEngine.getActive();
-
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+  async prepareNativeTransfer({
+    to,
+    value,
+    expectedWallet,
+  }: PrepareNativeTransferInput) {
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     const intent: NativeTransferIntent = {
       kind: "native-transfer",
@@ -563,16 +590,15 @@ export const transactionApi = {
     amountIn,
     quotedAmountOut,
     route,
+    expectedWallet,
   }: SwapQuoteInput & {
     quotedAmountOut: bigint;
 
     route: SwapRoute;
-  }) {
-    const activeWallet = await walletEngine.getActive();
 
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+    expectedWallet: WalletIdentity;
+  }) {
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     const deployment = requireDeployment();
 
@@ -645,6 +671,7 @@ export const transactionApi = {
     spender,
     tokenSymbol,
     spenderName,
+    expectedWallet,
   }: {
     token: Address;
 
@@ -653,12 +680,10 @@ export const transactionApi = {
     tokenSymbol: string;
 
     spenderName: string;
-  }) {
-    const activeWallet = await walletEngine.getActive();
 
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+    expectedWallet: WalletIdentity;
+  }) {
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     return prepareErc20Revoke(
       {
@@ -690,6 +715,7 @@ export const transactionApi = {
     spender,
     tokenSymbol,
     spenderName,
+    expectedWallet,
   }: {
     token: Address;
 
@@ -698,12 +724,10 @@ export const transactionApi = {
     tokenSymbol: string;
 
     spenderName: string;
-  }) {
-    const activeWallet = await walletEngine.getActive();
 
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+    expectedWallet: WalletIdentity;
+  }) {
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     return preparePermit2Revoke(
       {
@@ -735,6 +759,7 @@ export const transactionApi = {
     amount,
     tokenSymbol,
     tokenDecimals,
+    expectedWallet,
   }: {
     token: Address;
 
@@ -743,12 +768,10 @@ export const transactionApi = {
     tokenSymbol: string;
 
     tokenDecimals: number;
-  }) {
-    const activeWallet = await walletEngine.getActive();
 
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+    expectedWallet: WalletIdentity;
+  }) {
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     const deployment = requireDeployment();
 
@@ -789,12 +812,9 @@ export const transactionApi = {
     amount,
     tokenSymbol,
     tokenDecimals,
+    expectedWallet,
   }: Erc20TransferInput) {
-    const activeWallet = await walletEngine.getActive();
-
-    if (!activeWallet) {
-      throw new Error("Active wallet not found");
-    }
+    const activeWallet = await activeWalletMatching(expectedWallet);
 
     const intent: Erc20TransferIntent = {
       kind: "erc20-transfer",

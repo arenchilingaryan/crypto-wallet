@@ -1,4 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator } from "react-native";
 import { getAddress, isAddress } from "viem";
@@ -63,6 +65,12 @@ export default function AssetScreen() {
   const [watchError, setWatchError] = useState<string | null>(null);
 
   const marketRequestId = useRef(0);
+
+  // Expo Router can keep this screen mounted while `id` changes. Without a
+  // generation stamp, a slow load for the previous token finishes last and
+  // paints itself over the token the user actually navigated to.
+  const assetRequestId = useRef(0);
+
   const forceIntelligenceRefresh = useRef(false);
 
   const loadedRange = useRef<MarketRange | null>(null);
@@ -93,6 +101,11 @@ export default function AssetScreen() {
     }
 
     void loadAssetRef.current(id);
+
+    return () => {
+      // Leaving this route (or changing its id) retires whatever is in flight.
+      assetRequestId.current += 1;
+    };
   }, [id, routeChainId]);
 
   const intelligenceAddress =
@@ -155,6 +168,10 @@ export default function AssetScreen() {
   ]);
 
   async function loadAsset(assetId: string) {
+    const requestId = ++assetRequestId.current;
+
+    const isCurrent = () => assetRequestId.current === requestId;
+
     try {
       setLoading(true);
       setError(null);
@@ -224,12 +241,16 @@ export default function AssetScreen() {
         throw new Error("Asset not found");
       }
 
+      if (!isCurrent()) {
+        return;
+      }
+
       setAsset(foundAsset);
       setNetworkId(portfolio.networkId);
       setLoading(false);
 
       try {
-        const requestId = ++marketRequestId.current;
+        const marketRequest = ++marketRequestId.current;
 
         const data = await fetchMarketData(
           portfolio.networkId,
@@ -237,7 +258,7 @@ export default function AssetScreen() {
           range,
         );
 
-        if (marketRequestId.current === requestId) {
+        if (isCurrent() && marketRequestId.current === marketRequest) {
           setMarketData(data);
 
           if (data) {
@@ -250,9 +271,13 @@ export default function AssetScreen() {
     } catch (error) {
       console.error("Asset loading failed:", error);
 
-      setError("Failed to load asset");
+      if (isCurrent()) {
+        setError("Failed to load asset");
+      }
     } finally {
-      setLoading(false);
+      if (isCurrent()) {
+        setLoading(false);
+      }
     }
   }
 
@@ -406,7 +431,7 @@ export default function AssetScreen() {
 
         <Screen
           onBack={() => {
-            router.back();
+            goBack("/");
           }}
           style={{
             alignItems: "center",
@@ -430,7 +455,7 @@ export default function AssetScreen() {
 
         <Screen
           onBack={() => {
-            router.back();
+            goBack("/");
           }}
         >
           <AppText variant="bodyStrong" tone="danger">
@@ -473,14 +498,20 @@ export default function AssetScreen() {
           setIntelligenceRequestNonce((nonce) => nonce + 1);
         }}
         onReceive={() => {
-          if (!id) {
+          // Derived from the asset actually on screen, not from the raw route
+          // parameter, so Receive can never open a different token than the
+          // one the user is looking at.
+          const assetId =
+            asset.type === "native" ? "native" : asset.contractAddress;
+
+          if (!assetId) {
             return;
           }
 
           router.push({
             pathname: "/receive/[id]",
             params: {
-              id,
+              id: assetId,
             },
           });
         }}
@@ -506,7 +537,7 @@ export default function AssetScreen() {
           });
         }}
         onBack={() => {
-          router.back();
+          goBack("/");
         }}
       />
     </>

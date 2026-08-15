@@ -11,7 +11,11 @@ import {
   PERMIT2_UNLIMITED,
 } from "./permit2";
 import { truncateAddress } from "./addressFingerprint";
-import { pairKey, type Coverage } from "./approvalDiscovery";
+import {
+  pairKey,
+  type Coverage,
+  type SpenderPair,
+} from "./approvalDiscovery";
 
 export type ApprovalChannel = "erc20" | "permit2";
 
@@ -118,6 +122,11 @@ export type ApprovalScan = {
   // from a fixed list — zero here means that channel was never asked at all,
   // which is a limit of the check, not evidence that nothing is there.
   permit2SpendersChecked: number;
+
+  // Discovery candidates worth carrying into the next scan. A successful zero
+  // allowance is authoritative and prunes the pair; a non-zero or unreadable
+  // allowance remains eligible so an outage cannot erase a live permission.
+  retainedDirectPairs?: readonly SpenderPair[];
 };
 
 const UNLIMITED_THRESHOLD = 2n ** 255n;
@@ -298,6 +307,8 @@ export async function getApprovals(
 
   const discovered = options?.discovered ?? [];
 
+  const discoveredPairKeys = new Set(discovered.map((pair) => pairKey(pair)));
+
   // Build the direct-channel candidate set: every known spender against every
   // held token (bootstrap), unioned with everything discovery found. Dedupe by
   // (token, spender); a held-token entry wins so we keep balance and price.
@@ -408,6 +419,8 @@ export async function getApprovals(
 
   const approvals: TokenApproval[] = [];
 
+  const retainedDirectPairKeys = new Set<string>();
+
   let expiredCount = 0;
 
   let uncertainDiscoveredRows = 0;
@@ -451,6 +464,8 @@ export async function getApprovals(
     }
 
     if (result.status !== "success") {
+      retainedDirectPairKeys.add(pairKey(pair));
+
       // A budget probe against the Permit2 contract is not an approval row; its
       // failure is expressed by leaving the budget unknown, which makes the
       // Permit2 permissions uncertain further down. Record it so the failure is
@@ -533,6 +548,8 @@ export async function getApprovals(
     if (allowance <= 0n) {
       return;
     }
+
+    retainedDirectPairKeys.add(pairKey(pair));
 
     const unlimited = allowance >= UNLIMITED_THRESHOLD;
 
@@ -823,5 +840,15 @@ export async function getApprovals(
     unreadPermit2Count: unreadPermit2Tokens.size,
 
     permit2SpendersChecked: permit2Spenders.length,
+
+    retainedDirectPairs: directPairs
+      .filter((pair) => {
+        const key = pairKey(pair);
+
+        return (
+          discoveredPairKeys.has(key) && retainedDirectPairKeys.has(key)
+        );
+      })
+      .map(({ token, spender }) => ({ token, spender })),
   };
 }

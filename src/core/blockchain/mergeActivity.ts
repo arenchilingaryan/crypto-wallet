@@ -5,6 +5,7 @@ import { resolveDirection, type ActivityItem } from "./activity";
 import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
 
 import { addDecimalAmounts, isPositiveAmount } from "./decimalAmount";
+import { toBigIntOrNull } from "@/core/storage/decimalString";
 
 function creditedFromChain(
   transaction: TrackedTransaction,
@@ -15,7 +16,10 @@ function creditedFromChain(
     return null;
   }
 
-  const symbolOut = transaction.symbolOut?.toLowerCase();
+  const symbolOut =
+    typeof transaction.symbolOut === "string"
+      ? transaction.symbolOut.toLowerCase()
+      : null;
 
   if (!symbolOut) {
     return null;
@@ -60,12 +64,21 @@ function trackedToActivity(
     return null;
   }
 
+  const value = toBigIntOrNull(transaction.valueWei) ?? 0n;
+
+  const valueOut = toBigIntOrNull(transaction.valueOutWei);
+
   const amount =
     transaction.assetType === "native"
-      ? formatEther(BigInt(transaction.valueWei))
+      ? formatEther(value)
       : formatUnits(
-          BigInt(transaction.valueWei),
-          transaction.tokenDecimals ?? 18,
+          value,
+          typeof transaction.tokenDecimals === "number" &&
+            Number.isInteger(transaction.tokenDecimals) &&
+            transaction.tokenDecimals >= 0 &&
+            transaction.tokenDecimals <= 255
+            ? transaction.tokenDecimals
+            : 18,
         );
 
   return {
@@ -98,25 +111,33 @@ function trackedToActivity(
         ? null
         : (transaction.contractAddress ?? null),
 
-    blockNumber: transaction.blockNumber
-      ? BigInt(transaction.blockNumber)
-      : null,
+    blockNumber: toBigIntOrNull(transaction.blockNumber),
 
     timestamp: transaction.createdAt,
 
-    symbolOut: transaction.symbolOut,
+    symbolOut:
+      typeof transaction.symbolOut === "string"
+        ? transaction.symbolOut
+        : undefined,
 
+    // A value we cannot read is absent, not zero and not a crash. The stored
+    // record is validated on the way in; this is the second wall, so a field
+    // nobody remembered to whitelist cannot take the screen down.
     amountOut:
       credited ??
-      (transaction.valueOutWei !== undefined
-        ? formatUnits(
-            BigInt(transaction.valueOutWei),
-            transaction.tokenOutDecimals ?? 18,
-          )
-        : undefined),
+      (valueOut === null
+        ? undefined
+        : formatUnits(
+            valueOut,
+            typeof transaction.tokenOutDecimals === "number" &&
+              Number.isInteger(transaction.tokenOutDecimals) &&
+              transaction.tokenOutDecimals >= 0 &&
+              transaction.tokenOutDecimals <= 255
+              ? transaction.tokenOutDecimals
+              : 18,
+          )),
 
-    amountOutIsQuote:
-      credited === null && transaction.valueOutWei !== undefined,
+    amountOutIsQuote: credited === null && valueOut !== null,
   };
 }
 

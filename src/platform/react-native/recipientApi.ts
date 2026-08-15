@@ -1,6 +1,7 @@
 import type { Address } from "viem";
 
 import { getProvenRecipients } from "@/core/blockchain/getActivity";
+import { confirmedOnChain } from "@/core/security/policyContext";
 import {
   analyzeRecipient,
   type HistoryCoverage,
@@ -37,6 +38,14 @@ export const recipientApi = {
 
     for (const item of tracked) {
       if (item.status !== "confirmed") {
+        continue;
+      }
+
+      // "Confirmed" is this device's own word for it. Telling the user "you
+      // have sent here before" on the screen where they decide has to rest on
+      // something a local record cannot invent: the block it was mined in, the
+      // gas it burned, and when it settled. Same rule as the policy context.
+      if (!confirmedOnChain(item)) {
         continue;
       }
 

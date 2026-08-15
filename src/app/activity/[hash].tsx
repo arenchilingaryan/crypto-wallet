@@ -4,6 +4,8 @@ import { ActivityIndicator } from "react-native";
 
 import { useLocalSearchParams, useRouter } from "expo-router";
 
+import { goBack } from "@/utils/navigation";
+
 import type { Hash } from "viem";
 
 import { TransactionDetailsView } from "@/components/screens/transaction-details-view";
@@ -104,7 +106,7 @@ export default function TransactionDetailsScreen() {
       transaction={transaction}
       onBack={() => {
         if (router.canGoBack()) {
-          router.back();
+          goBack("/activity");
           return;
         }
 

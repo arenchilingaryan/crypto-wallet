@@ -1,7 +1,15 @@
 import type { Address } from "viem";
 
+// Whether the limits below are the ones the user actually chose. A stored
+// policy that cannot be read tells us nothing about their intent, and "we
+// could not read your limits" must never be served as "you configured none".
+// This is derived on every read and never trusted from storage.
+export type PolicyAvailability = "configured" | "unavailable";
+
 export type SecurityPolicy = {
   version: 1;
+
+  availability: PolicyAvailability;
 
   maxSingleTransferUsd: number | null;
 
@@ -20,6 +28,8 @@ export type SecurityPolicy = {
 
 export const DEFAULT_SECURITY_POLICY: SecurityPolicy = {
   version: 1,
+
+  availability: "configured",
 
   maxSingleTransferUsd: null,
 
@@ -160,8 +170,18 @@ export function evaluateSecurityPolicy(
   return { allowed: true };
 }
 
+export const UNAVAILABLE_SECURITY_POLICY: SecurityPolicy = {
+  ...DEFAULT_SECURITY_POLICY,
+
+  availability: "unavailable",
+};
+
+// An absent or blank value is the genuine "never configured" case and keeps
+// the permissive defaults. Anything else that fails to read is a storage
+// fault: it is reported as unavailable, and every priced decision blocks on
+// it, because we cannot tell an unset limit from a lost one.
 export function parseSecurityPolicy(raw: string | null): SecurityPolicy {
-  if (!raw) {
+  if (raw === null || raw.trim() === "") {
     return DEFAULT_SECURITY_POLICY;
   }
 
@@ -169,11 +189,15 @@ export function parseSecurityPolicy(raw: string | null): SecurityPolicy {
     const parsed = JSON.parse(raw) as Partial<SecurityPolicy>;
 
     if (parsed.version !== 1) {
-      return DEFAULT_SECURITY_POLICY;
+      return UNAVAILABLE_SECURITY_POLICY;
     }
 
     return {
       version: 1,
+
+      // Derived from this read, never taken from the stored document: a
+      // hand-written `availability` must not launder a corrupt policy.
+      availability: "configured",
 
       maxSingleTransferUsd: normalizeLimit(parsed.maxSingleTransferUsd),
 
@@ -190,12 +214,15 @@ export function parseSecurityPolicy(raw: string | null): SecurityPolicy {
       maxSwapLossUsd: normalizeLimit(parsed.maxSwapLossUsd),
     };
   } catch {
-    return DEFAULT_SECURITY_POLICY;
+    return UNAVAILABLE_SECURITY_POLICY;
   }
 }
 
 export function serializeSecurityPolicy(policy: SecurityPolicy): string {
-  return JSON.stringify(policy);
+  // `availability` describes a read, not a preference, so it is never written.
+  const { availability: _availability, ...stored } = policy;
+
+  return JSON.stringify(stored);
 }
 
 function normalizeLimit(value: unknown): number | null {

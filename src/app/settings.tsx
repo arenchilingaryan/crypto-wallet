@@ -2,6 +2,8 @@ import Constants from "expo-constants";
 
 import { useRouter } from "expo-router";
 
+import { goBack } from "@/utils/navigation";
+
 import { SettingsView } from "@/components/screens/settings-view";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
@@ -25,8 +27,11 @@ export default function SettingsScreen() {
       onOpenLimits={() => {
         router.push("/limits");
       }}
+      onRepairRecords={() => {
+        router.push("/repair");
+      }}
       onBack={() => {
-        router.back();
+        goBack("/");
       }}
     />
   );

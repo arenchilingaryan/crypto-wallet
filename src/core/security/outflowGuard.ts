@@ -11,10 +11,23 @@ import {
 export class ReservationStateError extends Error {
   constructor() {
     super(
-      "The record of transfers already awaiting signature cannot be read, so your daily limit cannot be enforced. Unlock the app again, or clear the wallet limits, before sending.",
+      "This device's record of transfers already awaiting signature cannot be read, so your daily limit cannot be enforced. Open Settings and repair local records, or turn the daily limit off, before sending.",
     );
 
     this.name = "ReservationStateError";
+  }
+}
+
+// Replacing a ledger that can be read discards holds this device knows about
+// and hands the whole daily limit back. That is the fail-open this guard
+// exists to prevent, so it is refused no matter who asks.
+export class ReadableReservationsError extends Error {
+  constructor() {
+    super(
+      "These holds can be read, so there is nothing to repair. Replacing them would hand back part of today's limit.",
+    );
+
+    this.name = "ReadableReservationsError";
   }
 }
 
@@ -62,6 +75,18 @@ export type OutflowGuard = {
   reconcile(): Promise<OutflowReservation[]>;
 
   reservedUsd(): Promise<number>;
+
+  readable(): Promise<boolean>;
+
+  // The explicit recovery action. Never called on its own: an unreadable
+  // ledger keeps failing closed until the user chooses this, because the
+  // discarded holds were counted against today's limit.
+  //
+  // `preserve` is handed the unreadable value and must finish before the live
+  // ledger is replaced, so a crash in between cannot lose the only remaining
+  // record of holds that were counted. A readable ledger is refused outright:
+  // otherwise this is a button that resets the daily limit on demand.
+  quarantine(preserve: (raw: string) => Promise<void>): Promise<void>;
 };
 
 export function createOutflowGuard({
@@ -158,8 +183,10 @@ export function createOutflowGuard({
         const state = parseReservations(await store.read());
 
         if (!state.readable) {
-          await store.write(serializeReservations([]));
-
+          // Overwriting the unreadable ledger here would turn a fail-closed
+          // state into a readable empty one: the throw is logged at startup,
+          // and the very next reservation then sails through against a limit
+          // it can no longer account for. Leave the state quarantined.
           throw new ReservationStateError();
         }
 
@@ -192,6 +219,25 @@ export function createOutflowGuard({
       return serialize(async () =>
         reservedTotalUsd(await readOrThrow(), now(), ttlMs),
       );
+    },
+
+    readable() {
+      return serialize(async () => parseReservations(await store.read()).readable);
+    },
+
+    quarantine(preserve) {
+      return serialize(async () => {
+        const raw = await store.read();
+
+        if (parseReservations(raw).readable) {
+          throw new ReadableReservationsError();
+        }
+
+        // `raw` is non-null here: parseReservations reports null as readable.
+        await preserve(raw as string);
+
+        await store.write(serializeReservations([]));
+      });
     },
   };
 }

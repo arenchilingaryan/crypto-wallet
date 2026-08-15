@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { useRouter } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 
 import { ActivityIndicator } from "react-native";
 
@@ -18,10 +19,7 @@ import { securityApi } from "@/platform/react-native/securityApi";
 
 type Step = "loading" | "verify" | "create" | "done";
 
-export default function ChangePinScreen() {
-  const router = useRouter();
-
-  const [step, setStep] = useState<Step>("loading");
+export default function ChangePinScreen() {  const [step, setStep] = useState<Step>("loading");
 
   useEffect(() => {
     let mounted = true;
@@ -59,7 +57,7 @@ export default function ChangePinScreen() {
         key="verify"
         mode="verify"
         onCancel={() => {
-          router.back();
+          goBack("/settings");
         }}
         onSubmit={async (pin) => {
           const result = await securityApi.verifyCurrentPin(pin);
@@ -82,7 +80,7 @@ export default function ChangePinScreen() {
         key="create"
         mode="setup"
         onCancel={() => {
-          router.back();
+          goBack("/settings");
         }}
         onSubmit={async (pin) => {
           try {
@@ -112,7 +110,7 @@ export default function ChangePinScreen() {
         <Button
           title="Done"
           onPress={() => {
-            router.back();
+            goBack("/settings");
           }}
         />
       </Footer>

@@ -71,7 +71,10 @@ export async function getTokenMetadata(
   const result = (await response.json()) as AlchemyResponse;
 
   if (result.error) {
-    return null;
+    // A JSON-RPC error is a provider failure, not evidence that the contract has
+    // no metadata. Keep that distinction so callers cannot turn an outage or
+    // rate limit into an authoritative "token not found" result.
+    throw new Error("Token metadata provider returned a JSON-RPC error");
   }
 
   const metadata = result.result;

@@ -2,6 +2,7 @@ import type { Address } from "viem";
 
 import {
   decidePolicy,
+  type ContextUnavailableReason,
   type NetworkKind,
   type PolicyDecision,
   type PriceAvailability,
@@ -42,6 +43,52 @@ function check(
 
 function blockedBy(decision: PolicyDecision, reason: string) {
   return decision.decision === "block" && decision.reason === reason;
+}
+
+// Facts about the transfer itself. They stay true whether or not the saved
+// policy could be read, so they are shown on both paths.
+function transferShapeChecks(recipientIsContract: boolean | null): ReviewCheck[] {
+  const checks: ReviewCheck[] = [
+    check(
+      "ongoing-permission",
+      "pass",
+      "This grants no ongoing permission",
+      "It moves this amount once. Nothing can be spent from your wallet later because of it.",
+    ),
+  ];
+
+  if (recipientIsContract === true) {
+    checks.push(
+      check(
+        "recipient-is-contract",
+        "attention",
+        "The recipient is a contract, not a wallet",
+        "Tokens sent to a contract that does not expect them cannot be recovered.",
+      ),
+    );
+  } else if (recipientIsContract === null) {
+    checks.push(
+      check(
+        "recipient-is-contract",
+        "unchecked",
+        "Could not tell whether the recipient is a contract",
+      ),
+    );
+  }
+
+  return checks;
+}
+
+// Every dollar rule is unknowable while the stored policy cannot be read.
+// Rendering the usual "you have not set one" lines here would report a storage
+// fault as the user's own choice.
+function unreadableLimitsCheck(decision: PolicyDecision): ReviewCheck {
+  return check(
+    "limits-readable",
+    "blocked",
+    "Your saved limits could not be read",
+    decision.decision === "block" ? decision.message : null,
+  );
 }
 
 function limitsOffOnTestnet(decision: PolicyDecision) {
@@ -88,6 +135,8 @@ export type TransferReviewInput = {
 
   context: PolicyContext | null;
 
+  contextUnavailable?: ContextUnavailableReason;
+
   networkKind: NetworkKind;
 
   priceAvailability: PriceAvailability;
@@ -104,6 +153,8 @@ export function reviewTransfer(input: TransferReviewInput): SecurityReview {
     policy: input.policy,
 
     context: input.context,
+
+    contextUnavailable: input.contextUnavailable,
 
     networkKind: input.networkKind,
 
@@ -152,6 +203,16 @@ export function reviewTransfer(input: TransferReviewInput): SecurityReview {
         "Check the address against the source you copied it from.",
       ),
     );
+  }
+
+  if (blockedBy(decision, "policy-unavailable")) {
+    return sealReview(decision, [
+      ...checks,
+
+      unreadableLimitsCheck(decision),
+
+      ...transferShapeChecks(input.recipientIsContract),
+    ]);
   }
 
   const singleLimit = input.policy.maxSingleTransferUsd;
@@ -290,33 +351,7 @@ export function reviewTransfer(input: TransferReviewInput): SecurityReview {
     );
   }
 
-  checks.push(
-    check(
-      "ongoing-permission",
-      "pass",
-      "This grants no ongoing permission",
-      "It moves this amount once. Nothing can be spent from your wallet later because of it.",
-    ),
-  );
-
-  if (input.recipientIsContract === true) {
-    checks.push(
-      check(
-        "recipient-is-contract",
-        "attention",
-        "The recipient is a contract, not a wallet",
-        "Tokens sent to a contract that does not expect them cannot be recovered.",
-      ),
-    );
-  } else if (input.recipientIsContract === null) {
-    checks.push(
-      check(
-        "recipient-is-contract",
-        "unchecked",
-        "Could not tell whether the recipient is a contract",
-      ),
-    );
-  }
+  checks.push(...transferShapeChecks(input.recipientIsContract));
 
   return sealReview(decision, checks);
 }
@@ -377,6 +412,10 @@ export function reviewApproval(input: ApprovalReviewInput): SecurityReview {
     );
 
     return sealReview(decision, checks);
+  }
+
+  if (blockedBy(decision, "policy-unavailable")) {
+    checks.push(unreadableLimitsCheck(decision));
   }
 
   if (blockedBy(decision, "approval-unknown-spender")) {
@@ -523,6 +562,10 @@ export function reviewSwap(input: SwapReviewInput): SecurityReview {
           "This wallet cannot confirm which contract would execute the swap.",
         ),
   ];
+
+  if (blockedBy(decision, "policy-unavailable")) {
+    checks.push(unreadableLimitsCheck(decision));
+  }
 
   if (blockedBy(decision, "swap-over-loss")) {
     checks.push(

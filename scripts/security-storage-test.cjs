@@ -1,5 +1,9 @@
+/* global __dirname */
+
 const path = require("node:path");
 const Module = require("node:module");
+const { entropyToMnemonic } = require("@scure/bip39");
+const { wordlist } = require("@scure/bip39/wordlists/english.js");
 require("sucrase/register/ts");
 
 const SRC = path.join(__dirname, "..", "src");
@@ -32,8 +36,12 @@ const { clearAllPendingSecrets } = require(
   path.join(SRC, "platform/react-native/pendingSecrets.ts"),
 );
 
-const MNEMONIC =
-  "congress plastic traffic siren cereal rare lend hood buzz business ask cross";
+// Deterministic public test entropy. The resulting BIP-39 fixture exists only
+// in this process and is never printed or committed as wallet credentials.
+const MNEMONIC = entropyToMnemonic(
+  Uint8Array.from({ length: 16 }, (_, index) => index),
+  wordlist,
+);
 const ID = "0xabc";
 
 let failed = 0;
@@ -52,7 +60,7 @@ function check(label, passed, detail = "") {
   check(
     "a secret saved before the vault is open never touches storage in plaintext",
     withoutKey === null,
-    withoutKey === null ? "nothing on disk" : `LEAKED: ${withoutKey.slice(0, 40)}`,
+    withoutKey === null ? "nothing on disk" : "plaintext was persisted",
   );
 
   const staged = await expoSecretStore.load(ID);
@@ -70,13 +78,13 @@ function check(label, passed, detail = "") {
 
   check(
     "once the vault is open the secret is written as a sealed vault, not plaintext",
-    sealed.includes('"version":2') && !sealed.includes("congress"),
-    sealed.slice(0, 40),
+    sealed.includes('"version":2') && !sealed.includes(MNEMONIC),
+    "a versioned sealed envelope was persisted",
   );
 
   check(
     "the mnemonic never appears anywhere in storage in the clear",
-    ![...store.values()].some((value) => value.includes("congress")),
+    ![...store.values()].some((value) => value.includes(MNEMONIC)),
   );
 
   // A staged (memory-only) secret must not outlive a lock.

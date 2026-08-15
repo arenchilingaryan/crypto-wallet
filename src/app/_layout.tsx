@@ -191,6 +191,8 @@ export default function RootLayout() {
 
         <Stack.Screen name="reveal" />
 
+        <Stack.Screen name="repair" />
+
         <Stack.Screen name="activity/[hash]" />
       </Stack>
 

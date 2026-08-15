@@ -47,6 +47,44 @@ type GeckoSearchResponse = {
   included?: GeckoToken[];
 };
 
+// The provider is untrusted input. `included` is documented as a list, but a
+// valid JSON body can carry an object, a string, or entries missing the
+// fields below — and every one of those escapes the fetch/parse try block as
+// a raw TypeError on the render path instead of an unavailable catalogue.
+const MAX_CATALOGUE_ITEMS = 200;
+
+function isGeckoToken(value: unknown): value is GeckoToken {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const attributes = (value as { attributes?: unknown }).attributes;
+
+  if (typeof attributes !== "object" || attributes === null) {
+    return false;
+  }
+
+  const { address, name, symbol } = attributes as Record<string, unknown>;
+
+  return (
+    typeof address === "string" &&
+    typeof name === "string" &&
+    typeof symbol === "string"
+  );
+}
+
+function normalizeCatalogue(included: unknown): GeckoToken[] {
+  if (included === undefined || included === null) {
+    return [];
+  }
+
+  if (!Array.isArray(included)) {
+    throw new Error("Token search returned a malformed catalogue");
+  }
+
+  return included.slice(0, MAX_CATALOGUE_ITEMS).filter(isGeckoToken);
+}
+
 function matchesQuery(token: GeckoToken, query: string) {
   const value = query.toLowerCase();
 
@@ -70,6 +108,10 @@ export type NetworkTokenSearch = {
 
 export async function searchNetworkTokens(
   rawQuery: string,
+  // Which catalogue to consult, defaulting to the active network's. Passed
+  // explicitly by tests so their meaning does not quietly change with the
+  // network this build happens to be pinned to.
+  searchNetwork: string | null = ACTIVE_NETWORK.tokenSearchNetwork,
 ): Promise<NetworkTokenSearch> {
   const query = rawQuery.trim();
 
@@ -88,7 +130,15 @@ export async function searchNetworkTokens(
       return { results: [mapKnownToken(known)], catalogue: "complete" };
     }
 
-    const metadata = await getTokenMetadata(query);
+    let metadata: Awaited<ReturnType<typeof getTokenMetadata>>;
+
+    try {
+      metadata = await getTokenMetadata(query);
+    } catch (metadataError) {
+      console.error("Token metadata lookup unavailable:", metadataError);
+
+      return { results: [], catalogue: "unavailable" };
+    }
 
     if (!metadata) {
       return { results: [], catalogue: "complete" };
@@ -121,7 +171,7 @@ export async function searchNetworkTokens(
     mapKnownToken,
   );
 
-  const network = ACTIVE_NETWORK.tokenSearchNetwork;
+  const network = searchNetwork;
 
   if (!network) {
     // This network has no wider catalogue at all — the local list is the whole
@@ -160,7 +210,10 @@ export async function searchNetworkTokens(
 
     const result = (await response.json()) as GeckoSearchResponse;
 
-    tokens = result.included ?? [];
+    // Normalisation stays inside the try: a malformed shape is a provider
+    // failure like any other, and must degrade to "unavailable" rather than
+    // escape into the caller as an iteration error.
+    tokens = normalizeCatalogue(result?.included);
   } catch (searchError) {
     console.error("Wider token search unavailable:", searchError);
 

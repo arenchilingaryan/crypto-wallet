@@ -139,6 +139,72 @@ function taxReason(
   return null;
 }
 
+type HoneypotAggregateAssessment = {
+  known: boolean;
+  reason: RiskReason | null;
+};
+
+function assessHoneypotAggregate(
+  snapshot: NormalizedHoneypotSnapshot | null,
+): HoneypotAggregateAssessment {
+  if (!snapshot) {
+    return { known: false, reason: null };
+  }
+
+  const rawRisk = snapshot.summary.risk;
+  const rawScore = snapshot.summary.riskLevel;
+  const normalizedRisk =
+    rawRisk === UNKNOWN
+      ? null
+      : rawRisk.trim().toLowerCase().replace(/[_-]+/g, " ");
+  const score =
+    rawScore === UNKNOWN || !Number.isFinite(rawScore) ? null : rawScore;
+  const clearLabels = new Set(["none", "very low", "low"]);
+  const recognizedRisk =
+    normalizedRisk !== null &&
+    (clearLabels.has(normalizedRisk) ||
+      normalizedRisk === "medium" ||
+      normalizedRisk === "high" ||
+      normalizedRisk === "very high" ||
+      normalizedRisk === "critical" ||
+      normalizedRisk === "honeypot");
+
+  let level: "medium" | "high" | "critical" | null = null;
+
+  if (
+    normalizedRisk === "critical" ||
+    normalizedRisk === "honeypot" ||
+    score === 100
+  ) {
+    level = "critical";
+  } else if (normalizedRisk === "high" || normalizedRisk === "very high") {
+    level = "high";
+  } else if (normalizedRisk === "medium") {
+    level = "medium";
+  }
+
+  if (!level) {
+    return {
+      // A clean aggregate can only contribute to LOW when both normalized
+      // fields are present and the provider label is one we understand.
+      known: recognizedRisk && score !== null,
+      reason: null,
+    };
+  }
+
+  const scoreText = score === null ? "" : ` (provider score ${score})`;
+
+  return {
+    known: recognizedRisk && score !== null,
+    reason: reason(
+      `honeypot-aggregate-${level}`,
+      level,
+      `Honeypot.is reports a ${level} aggregate assessment${scoreText}. This is provider evidence, not a Firewall decision.`,
+      ["honeypot-check"],
+    ),
+  };
+}
+
 export function buildTradeIntelligence({
   goplus,
   honeypot,
@@ -148,6 +214,7 @@ export function buildTradeIntelligence({
 }): TradeBuildResult {
   const go = goplus.status === "available" ? goplus.data : null;
   const hp = honeypot.status === "available" ? honeypot.data : null;
+  const honeypotAggregate = assessHoneypotAggregate(hp);
 
   const simulationSuccess = singleEvidence(
     observation(
@@ -271,6 +338,10 @@ export function buildTradeIntelligence({
         evidenceSources(honeypotEvidence),
       ),
     );
+  }
+
+  if (honeypotAggregate.reason) {
+    reasons.push(honeypotAggregate.reason);
   }
 
   if (
@@ -445,6 +516,7 @@ export function buildTradeIntelligence({
       availableCount === 2 &&
       simulationSuccess.value === true &&
       allWarningFactsKnown &&
+      honeypotAggregate.known &&
       asTriState(go?.trading.isInDex ?? UNKNOWN) !== UNKNOWN &&
       reasons.length === 0,
   });

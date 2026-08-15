@@ -1,4 +1,4 @@
-import type { Hash, Hex } from "viem";
+import { keccak256, type Hash, type Hex } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
@@ -13,7 +13,10 @@ import {
   type TrackedTransactionStatus,
 } from "@/core/transactions/trackedTransaction";
 import { creditedFromLogs } from "@/core/transactions/executionFacts";
-import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
+import {
+  resolveBroadcast,
+  type TransactionPresence,
+} from "@/core/transactions/resolveBroadcast";
 import { describeSwapRoute } from "@/core/transactions/createSwapPreview";
 
 import { walletEngine } from "./compositionRoot";
@@ -27,6 +30,45 @@ import {
   saveTrackedTransaction,
   updateTrackedTransaction,
 } from "./trackedTransactionStore";
+
+// Only the node's dedicated "there is no such transaction" answer is evidence
+// of absence. Transport failures, timeouts, rate limits and unparseable
+// replies all arrive here too, and they mean nothing at all.
+function isTransactionNotFound(error: unknown): boolean {
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!(current instanceof Error)) {
+      return false;
+    }
+
+    if (current.name === "TransactionNotFoundError") {
+      return true;
+    }
+
+    current = (current as { cause?: unknown }).cause;
+  }
+
+  return false;
+}
+
+// The stored bytes must be the ones this record names, or resending them would
+// broadcast a transaction that no review, PIN authorization or signing check
+// ever saw.
+function signedBytesMatchHash(
+  signedRawTx: string | null | undefined,
+  hash: Hash,
+): signedRawTx is Hex {
+  if (typeof signedRawTx !== "string" || !/^0x[0-9a-fA-F]*$/u.test(signedRawTx)) {
+    return false;
+  }
+
+  try {
+    return keccak256(signedRawTx as Hex).toLowerCase() === hash.toLowerCase();
+  } catch {
+    return false;
+  }
+}
 
 async function blockTimestamp(blockNumber: bigint): Promise<number> {
   try {
@@ -359,19 +401,19 @@ export const trackedTransactionApi = {
   },
 
   async resolveUnfinished(transaction: TrackedTransaction) {
-    let transactionSeen = false;
+    let presence: TransactionPresence;
 
     try {
       await ethereumPublicClient.getTransaction({ hash: transaction.hash });
 
-      transactionSeen = true;
-    } catch {
-      transactionSeen = false;
+      presence = "seen";
+    } catch (error) {
+      presence = isTransactionNotFound(error) ? "not-found" : "unknown";
     }
 
     let accountNonce: number | null = null;
 
-    if (!transactionSeen) {
+    if (presence === "not-found") {
       try {
         accountNonce = await ethereumPublicClient.getTransactionCount({
           address: transaction.from,
@@ -386,7 +428,7 @@ export const trackedTransactionApi = {
     const resolution = resolveBroadcast({
       receipt: null,
 
-      transactionSeen,
+      presence,
 
       accountNonce,
 
@@ -408,17 +450,39 @@ export const trackedTransactionApi = {
         return resolution;
 
       case "supersede":
+        // Another transaction consumed the nonce. That is not an on-chain
+        // execution failure, and must not be told as one.
         await updateTrackedTransaction(transaction.hash, {
-          status: "reverted",
+          status: "superseded",
         });
 
         return resolution;
 
-      case "rebroadcast":
+      case "rebroadcast": {
+        if (!signedBytesMatchHash(transaction.signedRawTx, transaction.hash)) {
+          console.error(
+            `Refusing to resend ${transaction.hash}: the stored signed bytes do not hash to this record.`,
+          );
+
+          if (transaction.status === "broadcast-pending") {
+            await updateTrackedTransaction(transaction.hash, {
+              status: "broadcast-unknown",
+            });
+          }
+
+          return resolution;
+        }
+
+        const serializedTransaction = transaction.signedRawTx as Hex;
+
         try {
-          await ethereumPublicClient.sendRawTransaction({
-            serializedTransaction: transaction.signedRawTx as Hex,
+          const returnedHash = await ethereumPublicClient.sendRawTransaction({
+            serializedTransaction,
           });
+
+          if (returnedHash.toLowerCase() !== transaction.hash.toLowerCase()) {
+            throw new Error("RPC returned unexpected transaction hash");
+          }
 
           await updateTrackedTransaction(transaction.hash, {
             status: "pending",
@@ -437,6 +501,7 @@ export const trackedTransactionApi = {
         }
 
         return resolution;
+      }
 
       case "wait":
       case "confirm":

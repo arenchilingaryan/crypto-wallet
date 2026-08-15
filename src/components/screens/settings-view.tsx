@@ -22,6 +22,8 @@ type SettingsViewProps = {
 
   onRevealPhrase: () => void;
 
+  onRepairRecords: () => void;
+
   onBack?: () => void;
 };
 
@@ -97,6 +99,7 @@ export function SettingsView({
   onChangePin,
   onOpenLimits,
   onRevealPhrase,
+  onRepairRecords,
   onBack,
 }: SettingsViewProps) {
   return (
@@ -131,6 +134,13 @@ export function SettingsView({
           subtitle="Update the 6-digit code protecting this wallet"
           divider
           onPress={onChangePin}
+        />
+
+        <SettingsRow
+          title="Repair local records"
+          subtitle="What to do when this device cannot read its own transaction record"
+          divider
+          onPress={onRepairRecords}
         />
       </SettingsSection>
 

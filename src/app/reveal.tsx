@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { ActivityIndicator } from "react-native";
 
-import { useRouter } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 
 import { PinView } from "@/components/screens/pin-view";
 import { RevealSecretView } from "@/components/screens/reveal-secret-view";
@@ -18,10 +19,7 @@ import { securityApi } from "@/platform/react-native/securityApi";
 import { startTimingRun } from "@/platform/react-native/timings";
 import { walletApi } from "@/platform/react-native/walletApi";
 
-export default function RevealScreen() {
-  const router = useRouter();
-
-  const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
+export default function RevealScreen() {  const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
 
   const [secret, setSecret] = useState<RevealedSecret | null>(null);
 
@@ -60,7 +58,7 @@ export default function RevealScreen() {
         onBack={() => {
           setSecret(null);
 
-          router.back();
+          goBack("/settings");
         }}
       />
     );
@@ -70,7 +68,7 @@ export default function RevealScreen() {
     return (
       <Screen
         onBack={() => {
-          router.back();
+          goBack("/settings");
         }}
       >
         <AppText variant="bodyStrong" tone="danger">
@@ -84,7 +82,7 @@ export default function RevealScreen() {
     <PinView
       mode={pinConfigured ? "verify" : "setup"}
       onCancel={() => {
-        router.back();
+        goBack("/settings");
       }}
       onSubmit={async (pin) => {
         const timing = startTimingRun("reveal");

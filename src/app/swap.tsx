@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { router, useLocalSearchParams } from "expo-router";
 
+import { goBack } from "@/utils/navigation";
+
 import {
   formatUnits,
   getAddress,
@@ -287,22 +289,37 @@ export default function SwapScreen() {
     let mounted = true;
 
     void (async () => {
-      const selected = await resolveAsset(from, portfolio);
+      try {
+        const selected = await resolveAsset(from, portfolio);
 
-      if (!mounted || !selected) {
-        return;
+        if (!mounted) {
+          return;
+        }
+
+        if (!selected) {
+          setError("Failed to preselect the token to swap from");
+          return;
+        }
+
+        setPayAsset(selected);
+
+        setReceiveAsset((current) =>
+          current && sameAsset(current.ref, selected.ref) ? null : current,
+        );
+
+        setAmount("");
+        setQuote(null);
+        setInputError(null);
+        setError(null);
+      } catch (payAssetError) {
+        // A metadata provider failure here used to escape as an unhandled
+        // rejection, leaving the screen silently showing the wrong token.
+        console.error("Pay asset preselection failed:", payAssetError);
+
+        if (mounted) {
+          setError("Failed to preselect the token to swap from");
+        }
       }
-
-      setPayAsset(selected);
-
-      setReceiveAsset((current) =>
-        current && sameAsset(current.ref, selected.ref) ? null : current,
-      );
-
-      setAmount("");
-      setQuote(null);
-      setInputError(null);
-      setError(null);
     })();
 
     return () => {
@@ -797,13 +814,16 @@ export default function SwapScreen() {
           unlimited: false,
         });
 
-        setReview(approvalVerdict);
+        setReview(approvalVerdict.review);
 
-        const approvalBlocked = foldPolicyDecision(approvalVerdict.decision, {
-          allow: () => null,
-          uncovered: () => null,
-          block: (decision) => decision.message,
-        });
+        const approvalBlocked = foldPolicyDecision(
+          approvalVerdict.review.decision,
+          {
+            allow: () => null,
+            uncovered: () => null,
+            block: (decision) => decision.message,
+          },
+        );
 
         if (approvalBlocked !== null) {
           return;
@@ -817,6 +837,8 @@ export default function SwapScreen() {
           tokenSymbol: payAsset.ref.symbol,
 
           tokenDecimals: payAsset.ref.decimals,
+
+          expectedWallet: approvalVerdict.wallet,
         });
 
         setSubmitPhase({
@@ -851,9 +873,9 @@ export default function SwapScreen() {
             : "Uniswap V3, via WETH",
       });
 
-      setReview(swapVerdict);
+      setReview(swapVerdict.review);
 
-      const swapBlocked = foldPolicyDecision(swapVerdict.decision, {
+      const swapBlocked = foldPolicyDecision(swapVerdict.review.decision, {
         allow: () => null,
         uncovered: () => null,
         block: (decision) => decision.message,
@@ -873,6 +895,8 @@ export default function SwapScreen() {
         quotedAmountOut: quote.quotedAmountOut,
 
         route: quote.route,
+
+        expectedWallet: swapVerdict.wallet,
       });
 
       setSubmitPhase({
@@ -1288,7 +1312,7 @@ export default function SwapScreen() {
       onSubmit={handleSubmit}
       onBack={() => {
         if (router.canGoBack()) {
-          router.back();
+          goBack("/");
 
           return;
         }
