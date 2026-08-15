@@ -3,26 +3,60 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Hash } from "viem";
 
 import type { TrackedTransaction } from "@/core/transactions/trackedTransaction";
+import { parseTrackedTransactions } from "@/core/transactions/trackedTransactionState";
+import { freeQuarantineKey } from "@/core/storage/quarantineKey";
 
 const STORAGE_KEY = "transactions.tracked.v1";
 
+// Where an unreadable record is parked when the user explicitly chooses to
+// start a fresh one. It is kept, not deleted: it is the only remaining
+// evidence of transfers this device may still be responsible for.
+const QUARANTINE_KEY = "transactions.tracked.v1.unreadable";
+
 async function readAll(): Promise<TrackedTransaction[]> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  return parseTrackedTransactions(await AsyncStorage.getItem(STORAGE_KEY));
+}
 
-  if (!raw) {
-    return [];
-  }
+// Everything parked by an earlier repair, so the screen can offer to let go of
+// copies once they are no longer worth keeping — without which
+// `QuarantineFullError` names a way out that does not exist.
+export async function keptUnreadableRecords(): Promise<string[]> {
+  const keys = await AsyncStorage.getAllKeys();
 
+  return keys.filter(
+    (key) => key === QUARANTINE_KEY || key.startsWith(`${QUARANTINE_KEY}.`),
+  );
+}
+
+export async function forgetKeptUnreadableRecords(): Promise<number> {
+  const keys = await keptUnreadableRecords();
+
+  await AsyncStorage.multiRemove(keys);
+
+  return keys.length;
+}
+
+export async function trackedTransactionsReadable(): Promise<boolean> {
   try {
-    const parsed = JSON.parse(raw);
+    await readAll();
 
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed as TrackedTransaction[];
+    return true;
   } catch {
-    return [];
+    return false;
+  }
+}
+
+// Replacing a record that can be read discards transfers this device knows
+// about and hands back whatever they counted towards today's limit. Refused
+// here rather than in the screen, so the guarantee does not depend on which
+// button is currently rendered.
+export class ReadableTrackedTransactionsError extends Error {
+  constructor() {
+    super(
+      "These transactions can be read, so there is nothing to repair. Replacing them would hand back part of today's limit.",
+    );
+
+    this.name = "ReadableTrackedTransactionsError";
   }
 }
 
@@ -41,6 +75,40 @@ function serializeWrite<T>(task: () => Promise<T>): Promise<T> {
   );
 
   return run;
+}
+
+// The explicit recovery action. Nothing calls this on its own: an unreadable
+// record keeps failing closed until the user chooses this, because starting a
+// fresh record resets the outflow this device can account for.
+//
+// Runs inside the same write queue as every other mutation, and reads the raw
+// value once: checking readability with a second read would let a legitimate
+// write land in between and be destroyed unparked.
+export async function quarantineTrackedTransactions(): Promise<void> {
+  return serializeWrite(async () => {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+
+    try {
+      parseTrackedTransactions(raw);
+
+      throw new ReadableTrackedTransactionsError();
+    } catch (error) {
+      if (error instanceof ReadableTrackedTransactionsError) {
+        throw error;
+      }
+    }
+
+    // Parked first, and never over an earlier copy: a crash between the two
+    // writes must not be able to lose the only remaining evidence.
+    await AsyncStorage.setItem(
+      await freeQuarantineKey(QUARANTINE_KEY, (key) =>
+        AsyncStorage.getItem(key),
+      ),
+      raw as string,
+    );
+
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+  });
 }
 
 export async function listTrackedTransactions() {

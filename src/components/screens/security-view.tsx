@@ -45,6 +45,10 @@ type SecurityViewProps = {
   freeze: {
     frozen: boolean;
 
+    // False when the lockdown record cannot be read: signing stays refused,
+    // but there is no end time to report and the way out still has to be here.
+    readable?: boolean;
+
     remainingMs: number;
 
     unfreezeRequested: boolean;
@@ -229,9 +233,19 @@ export function SecurityView({
           </AppText>
 
           <AppText variant="bodyStrong" tone="paper">
-            Signing is blocked for another{" "}
-            {describeRemaining(freeze.remainingMs)}
+            {freeze.readable === false
+              ? "The lockdown record on this device cannot be read"
+              : `Signing is blocked for another ${describeRemaining(
+                  freeze.remainingMs,
+                )}`}
           </AppText>
+
+          {freeze.readable === false && (
+            <AppText variant="caption" tone="muted">
+              Nothing can be signed while that is true, and there is no end time
+              to wait out. Lifting it takes your PIN, as always.
+            </AppText>
+          )}
 
           {!pinConfigured && (
             <AppText variant="caption" tone="muted">

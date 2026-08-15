@@ -53,6 +53,7 @@ export type PolicyReason =
   | "swap-policy-not-implemented"
   | "price-unavailable"
   | "history-unavailable"
+  | "policy-unavailable"
   | "over-single-transfer"
   | "over-new-recipient"
   | "over-daily-outflow";
@@ -74,6 +75,7 @@ export type BlockReason = Extract<
   | "swap-over-loss"
   | "price-unavailable"
   | "history-unavailable"
+  | "policy-unavailable"
   | "over-single-transfer"
   | "over-new-recipient"
   | "over-daily-outflow"
@@ -108,12 +110,19 @@ export type PolicyDecision =
       message: string;
     };
 
+// Why the context is missing. "Try again when you are online" is useless
+// advice for a record that is corrupt on this device, and sends the user
+// looking for a network problem that does not exist.
+export type ContextUnavailableReason = "provider" | "local-record";
+
 export type PolicyDecisionInput = {
   intent: PolicyIntent;
 
   policy: SecurityPolicy;
 
   context: PolicyContext | null;
+
+  contextUnavailable?: ContextUnavailableReason;
 
   networkKind: NetworkKind;
 
@@ -330,9 +339,29 @@ export function decidePolicy({
   intent,
   policy,
   context,
+  contextUnavailable = "provider",
   networkKind,
   priceAvailability,
 }: PolicyDecisionInput): PolicyDecision {
+  // A policy we could not read is not a policy of no limits. Everything that
+  // creates or increases exposure blocks until the user restores it; giving
+  // permission back to a contract is the one thing still allowed through,
+  // because refusing a revoke would only keep the user exposed.
+  if (
+    policy.availability === "unavailable" &&
+    !(intent.kind === "approval" && intent.revoking)
+  ) {
+    return blocked(
+      "policy-unavailable",
+
+      "Your saved transaction limits could not be read, so this cannot be checked against them. Open Transaction limits, set them again, and try once more.",
+
+      null,
+
+      "unavailable",
+    );
+  }
+
   if (intent.kind === "approval") {
     return decideApproval(intent, policy, networkKind);
   }
@@ -362,7 +391,9 @@ export function decidePolicy({
       limitUsd: null,
 
       message:
-        "Could not check your transaction limits: wallet history is unavailable. Try again when you are online.",
+        contextUnavailable === "local-record"
+          ? "Could not check your transaction limits: this device's own record of recent transactions cannot be read. Open Settings and repair local records."
+          : "Could not check your transaction limits: wallet history is unavailable. Try again when you are online.",
     };
   }
 

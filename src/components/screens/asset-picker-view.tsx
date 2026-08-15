@@ -10,7 +10,6 @@ import { styles } from "./asset-picker-view.styles";
 import { shortenAddress } from "@/utils/format";
 import { SearchIcon } from "@/components/icons/search-icon";
 import { Colors } from "@/constants/theme";
-import { router } from "expo-router";
 import { AssetIcon } from "../asset-icon";
 import { BackIcon } from "../icons/back-icon";
 
@@ -61,14 +60,13 @@ export function AssetPickerView({
   return (
     <Screen style={styles.screen}>
       <View style={styles.header}>
+        {/* The screen that opened this picker knows where "back" belongs; this
+            component deciding for itself is how a swap picker ended up
+            returning to the wallet home instead of the screen behind it. */}
         <Pressable
-          onPress={() => {
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace("/");
-            }
-          }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={onBack}
           style={styles.backButton}
         >
           <BackIcon size={22} color={Colors.textPrimary} />

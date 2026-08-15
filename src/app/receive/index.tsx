@@ -4,6 +4,8 @@ import { useFocusEffect, useRouter } from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
+import { goBack } from "@/utils/navigation";
+
 import type { AssetSearchResult } from "@/core/blockchain/assetSearch";
 
 import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
@@ -139,7 +141,7 @@ export default function ReceiveScreen() {
       error={error}
       onChangeQuery={setQuery}
       onBack={() => {
-        router.replace("/");
+        goBack("/");
       }}
       onSelect={(asset) => {
         const assetId =

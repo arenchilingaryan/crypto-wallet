@@ -17,6 +17,8 @@ import { searchAssets } from "@/core/blockchain/searchAssets";
 import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { assetRouteParams } from "@/core/navigation/assetRoute";
+
+import { goBack } from "@/utils/navigation";
 import { watchKey } from "@/core/watchlist/watchlist";
 
 import { walletApi } from "@/platform/react-native/walletApi";
@@ -207,7 +209,7 @@ export default function SearchScreen() {
       }
       onChangeQuery={setQuery}
       onBack={() => {
-        router.back();
+        goBack(origin === "explore" ? "/explore" : "/");
       }}
       onSelect={(asset) => {
         const assetId =

@@ -7,6 +7,8 @@ const MAX_RESPONSE_BYTES = 2_000_000;
 
 const RESPONSE_TOO_LARGE = Symbol("response-too-large");
 
+const REQUEST_TIMED_OUT = Symbol("request-timed-out");
+
 async function readBoundedBody(response: Response): Promise<string> {
   const reader = response.body?.getReader?.();
 
@@ -112,12 +114,20 @@ export async function requestProviderJson({
     signal?.addEventListener("abort", abortFromCaller, { once: true });
   }
 
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  let deadlineHandle: ReturnType<typeof setTimeout> | null = null;
 
-  try {
+  // Enforce the deadline independently from AbortSignal. Some fetch adapters
+  // can ignore abort, which must not leave callers or their in-flight cache
+  // entries pending forever.
+  const enforcedDeadline = new Promise<never>((_resolve, reject) => {
+    deadlineHandle = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(REQUEST_TIMED_OUT);
+    }, timeoutMs);
+  });
+
+  const request = (async () => {
     let response: Response;
 
     try {
@@ -127,7 +137,7 @@ export async function requestProviderJson({
         signal: controller.signal,
       });
     } catch (error) {
-      if (timedOut) {
+      if (timedOut || error === REQUEST_TIMED_OUT) {
         throw new TokenIntelligenceProviderError(
           "Security data request timed out",
           provider,
@@ -213,8 +223,25 @@ export async function requestProviderJson({
         response.status,
       );
     }
+  })();
+
+  try {
+    return await Promise.race([request, enforcedDeadline]);
+  } catch (error) {
+    if (error === REQUEST_TIMED_OUT) {
+      throw new TokenIntelligenceProviderError(
+        "Security data request timed out",
+        provider,
+        "timeout",
+      );
+    }
+
+    throw error;
   } finally {
-    clearTimeout(timeout);
+    if (deadlineHandle !== null) {
+      clearTimeout(deadlineHandle);
+    }
+
     signal?.removeEventListener("abort", abortFromCaller);
   }
 }

@@ -1,4 +1,6 @@
 import { Stack, useRouter } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert } from "react-native";
 
@@ -113,7 +115,7 @@ export default function WalletsScreen() {
       // one that will sign the next transaction.
       await loadWallets({ showSpinner: false });
 
-      router.back();
+      goBack("/settings");
     } catch (error) {
       console.error("Wallet switch failed:", error);
 
@@ -154,7 +156,7 @@ export default function WalletsScreen() {
 
       await loadWallets({ showSpinner: false });
 
-      router.back();
+      goBack("/settings");
     } catch (error) {
       console.error("Wallet import failed:", error);
 
@@ -221,7 +223,7 @@ export default function WalletsScreen() {
 
     await loadWallets({ showSpinner: false });
 
-    router.back();
+    goBack("/settings");
   }
 
   function handleRemove(wallet: WalletAccount) {
@@ -327,7 +329,7 @@ export default function WalletsScreen() {
 
         <Screen
           onBack={() => {
-            router.back();
+            goBack("/settings");
           }}
           style={{
             alignItems: "center",
@@ -360,7 +362,7 @@ export default function WalletsScreen() {
         }}
         onRemove={handleRemove}
         onBack={() => {
-          router.back();
+          goBack("/settings");
         }}
       />
     </>

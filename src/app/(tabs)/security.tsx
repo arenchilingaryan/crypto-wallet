@@ -31,6 +31,10 @@ import {
   FREEZE_DURATION_MS,
 } from "@/core/security/panicFreeze";
 import { buildSecurityReview } from "@/core/security/securityReviewSummary";
+import {
+  walletIdentityOf,
+  type WalletIdentity,
+} from "@/core/wallet/walletIdentity";
 
 import { panicApi } from "@/platform/react-native/panicApi";
 
@@ -43,6 +47,9 @@ export default function SecurityScreen() {
   const router = useRouter();
 
   const [scan, setScan] = useState<ApprovalScan | null>(null);
+
+  // The wallet the listed permissions belong to, captured with the scan.
+  const [scanWallet, setScanWallet] = useState<WalletIdentity | null>(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -62,7 +69,10 @@ export default function SecurityScreen() {
 
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const [freeze, setFreeze] = useState({
+  const [freeze, setFreeze] = useState<
+    Awaited<ReturnType<typeof panicApi.status>>
+  >({
+    readable: true,
     frozen: false,
     remainingMs: 0,
     unfreezeRequested: false,
@@ -113,7 +123,21 @@ export default function SecurityScreen() {
           text: "Lock down",
           style: "destructive",
           onPress: () => {
-            void panicApi.freeze().then(() => panicApi.status()).then(setFreeze);
+            void (async () => {
+              try {
+                await panicApi.freeze();
+
+                setFreeze(await panicApi.status());
+              } catch (freezeError) {
+                // A lockdown the user asked for and did not get is the one
+                // failure they have to hear about, not an unhandled rejection.
+                console.error("Locking down signing failed:", freezeError);
+
+                setError(
+                  "Signing could not be locked down on this device. Nothing changed.",
+                );
+              }
+            })();
           },
         },
       ],
@@ -144,6 +168,8 @@ export default function SecurityScreen() {
           }
 
           setScan(nextScan);
+
+          setScanWallet(walletIdentityOf(wallet));
         } catch (scanError) {
           console.error("Approval scan failed:", scanError);
 
@@ -152,6 +178,8 @@ export default function SecurityScreen() {
             // asserting "No issues found" next to the failure that just
             // invalidated it.
             setScan(null);
+
+            setScanWallet(null);
 
             setError("Failed to read approvals");
           }
@@ -172,6 +200,10 @@ export default function SecurityScreen() {
     try {
       setError(null);
 
+      if (!scanWallet) {
+        throw new Error("Active wallet not found");
+      }
+
       const prepared =
         approval.channel === "permit2"
           ? await transactionApi.preparePermit2Revoke({
@@ -182,6 +214,11 @@ export default function SecurityScreen() {
               tokenSymbol: approval.tokenSymbol,
 
               spenderName: approval.spenderName,
+
+              // These permissions were listed for the wallet that was active
+              // when the scan ran. Revoking against a different one would
+              // spend gas on a wallet the user never looked at.
+              expectedWallet: scanWallet,
             })
           : await transactionApi.prepareErc20Revoke({
               token: approval.token,
@@ -191,6 +228,8 @@ export default function SecurityScreen() {
               tokenSymbol: approval.tokenSymbol,
 
               spenderName: approval.spenderName,
+
+              expectedWallet: scanWallet,
             });
 
       setTransaction(prepared);

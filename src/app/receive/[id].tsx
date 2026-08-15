@@ -1,4 +1,6 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 import { useEffect, useState } from "react";
 import { ActivityIndicator } from "react-native";
 import { getAddress, isAddress, type Address } from "viem";
@@ -28,10 +30,7 @@ type ReceiveState = {
   network: string;
 };
 
-export default function ReceiveScreen() {
-  const router = useRouter();
-
-  const { id } = useLocalSearchParams<{
+export default function ReceiveScreen() {  const { id } = useLocalSearchParams<{
     id?: string;
   }>();
 
@@ -145,7 +144,7 @@ export default function ReceiveScreen() {
 
         <Screen
           onBack={() => {
-            router.back();
+            goBack("/receive");
           }}
           style={{
             alignItems: "center",
@@ -169,7 +168,7 @@ export default function ReceiveScreen() {
 
         <Screen
           onBack={() => {
-            router.back();
+            goBack("/receive");
           }}
         >
           <AppText variant="bodyStrong" tone="danger">
@@ -190,7 +189,7 @@ export default function ReceiveScreen() {
 
       <Screen
         onBack={() => {
-          router.back();
+          goBack("/receive");
         }}
       >
         <ReceiveView

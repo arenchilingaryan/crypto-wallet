@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { useRouter } from "expo-router";
+
+import { goBack } from "@/utils/navigation";
 
 import {
   draftToPolicy,
@@ -18,10 +19,7 @@ import {
 
 import { policyApi } from "@/platform/react-native/policyApi";
 
-export default function LimitsScreen() {
-  const router = useRouter();
-
-  const [draft, setDraft] = useState<PolicyDraft>(
+export default function LimitsScreen() {  const [draft, setDraft] = useState<PolicyDraft>(
     policyToDraft(DEFAULT_SECURITY_POLICY),
   );
 
@@ -54,6 +52,7 @@ export default function LimitsScreen() {
       draft={draft}
       networkName={ACTIVE_NETWORK.name}
       enforced={!isTestnetNetwork(ACTIVE_NETWORK.id)}
+      unreadable={loaded.availability === "unavailable"}
       saving={saving}
       saved={saved}
       onChange={(next) => {
@@ -76,7 +75,7 @@ export default function LimitsScreen() {
         })();
       }}
       onBack={() => {
-        router.back();
+        goBack("/settings");
       }}
     />
   );

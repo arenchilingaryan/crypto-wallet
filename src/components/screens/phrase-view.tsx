@@ -1,3 +1,5 @@
+import { usePreventScreenCapture } from "expo-screen-capture";
+
 import { PhraseGrid } from "@/components/phrase-grid";
 import { Button } from "@/components/ui/button";
 import { Footer } from "@/components/ui/footer";
@@ -13,6 +15,8 @@ type PhraseViewProps = {
 };
 
 export function PhraseView({ words, onDone, onCancel }: PhraseViewProps) {
+  usePreventScreenCapture("wallet-phrase-view");
+
   return (
     <Screen scroll onBack={onCancel}>
       <ScreenHeader

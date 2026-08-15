@@ -1,3 +1,5 @@
+/* global __dirname */
+
 const path = require("node:path");
 const Module = require("node:module");
 

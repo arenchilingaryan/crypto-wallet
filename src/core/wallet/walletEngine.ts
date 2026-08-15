@@ -1,6 +1,5 @@
+import { isAddress, type Address } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
-
-import type { Address } from "viem";
 
 import type { KeyValueStorage } from "@/core/ports/keyValueStorage";
 import type { RandomSource } from "@/core/ports/randomSource";
@@ -41,6 +40,19 @@ export class WalletStorageUnavailableError extends Error {
     );
 
     this.name = "WalletStorageUnavailableError";
+  }
+}
+
+// Raised when a wallet was asked for before there is anywhere durable to keep
+// its recovery phrase. The caller still holds the phrase and can retry once
+// the PIN and vault exist; nothing has been written.
+export class WalletSecretNotDurableError extends Error {
+  constructor() {
+    super(
+      "This wallet cannot be saved until a PIN is set, because there is nowhere yet to keep its recovery phrase.",
+    );
+
+    this.name = "WalletSecretNotDurableError";
   }
 }
 
@@ -92,6 +104,23 @@ function getNextWalletName(wallets: WalletAccount[]) {
   return `Wallet ${maxIndex + 1}`;
 }
 
+function isWalletAccount(value: unknown): value is WalletAccount {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const wallet = value as Partial<WalletAccount>;
+
+  return (
+    typeof wallet.id === "string" &&
+    wallet.id.length > 0 &&
+    typeof wallet.name === "string" &&
+    typeof wallet.address === "string" &&
+    isAddress(wallet.address, { strict: false }) &&
+    wallet.id.toLowerCase() === wallet.address.toLowerCase()
+  );
+}
+
 export function createWalletEngine({
   storage,
   secrets,
@@ -115,17 +144,29 @@ export function createWalletEngine({
   async function readRegistry(): Promise<WalletAccount[]> {
     const value = await storage.get(WALLET_STORAGE_KEYS.registry);
 
-    if (!value) {
+    if (value === null || value.trim() === "") {
       return [];
     }
+
+    let parsed: unknown;
 
     try {
-      const parsed = JSON.parse(value);
-
-      return Array.isArray(parsed) ? (parsed as WalletAccount[]) : [];
+      parsed = JSON.parse(value);
     } catch {
-      return [];
+      throw new WalletStorageUnavailableError();
     }
+
+    if (!Array.isArray(parsed) || !parsed.every(isWalletAccount)) {
+      throw new WalletStorageUnavailableError();
+    }
+
+    const walletIds = new Set(parsed.map((wallet) => wallet.id.toLowerCase()));
+
+    if (walletIds.size !== parsed.length) {
+      throw new WalletStorageUnavailableError();
+    }
+
+    return parsed;
   }
 
   async function writeRegistry(wallets: WalletAccount[]) {
@@ -421,7 +462,32 @@ export function createWalletEngine({
       after: fingerprintRegistry(nextRegistry),
     });
 
-    await secrets.save(wallet.id, createWalletSecret(mnemonic));
+    const { durable } = await secrets.save(
+      wallet.id,
+      createWalletSecret(mnemonic),
+    );
+
+    // The registry and the active pointer are what make a wallet exist to the
+    // rest of the app. Writing them against a secret that lives only in
+    // process memory produces a wallet that survives a crash while its phrase
+    // does not: visible, selectable, and impossible to sign with. Roll the
+    // whole operation back instead and leave nothing behind.
+    if (!durable) {
+      try {
+        // Only the staged in-memory copy. `remove` would delete durable
+        // storage, and this same wallet id may already own a sealed secret
+        // from an earlier session — re-importing an existing phrase while the
+        // vault is closed would then destroy the live wallet it belongs to.
+        await secrets.discardStaged(wallet.id);
+      } catch {
+        // The staged copy dies with the process regardless. The registry is
+        // the state that must stay clean.
+      }
+
+      await clearJournal();
+
+      throw new WalletSecretNotDurableError();
+    }
 
     if (!existing) {
       await writeRegistry([...wallets, wallet]);

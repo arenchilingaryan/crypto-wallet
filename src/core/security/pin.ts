@@ -24,6 +24,19 @@ type PinDependencies = {
   hash: (value: string) => Promise<string>;
 };
 
+let verificationQueue: Promise<unknown> = Promise.resolve();
+
+function serializeVerification<T>(task: () => Promise<T>): Promise<T> {
+  const run = verificationQueue.then(task, task);
+
+  verificationQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
+}
+
 export type VerifyPinResult =
   | {
       ok: true;
@@ -123,6 +136,13 @@ export async function createPin(
 
 export async function verifyPin(
   pin: string,
+  dependencies: PinDependencies,
+): Promise<VerifyPinResult> {
+  return serializeVerification(() => verifyPinInQueue(pin, dependencies));
+}
+
+async function verifyPinInQueue(
+  pin: string,
   { storage, hash, random }: PinDependencies,
 ): Promise<VerifyPinResult> {
   if (!validatePin(pin)) {
@@ -149,11 +169,7 @@ export async function verifyPin(
     blockedUntilValue.trim() !== "" &&
     !Number.isFinite(blockedUntil)
   ) {
-    return {
-      ok: false,
-      reason: "locked",
-      retryAfterMs: PIN_LOCKOUT_MS,
-    };
+    return enterLockout(storage, now);
   }
 
   if (blockedUntil > now) {
@@ -242,23 +258,16 @@ export async function verifyPin(
 
   const attemptsValue = await storage.get(SECURITY_STORAGE_KEYS.failedAttempts);
 
-  const attempts = attemptsValue !== null ? Number(attemptsValue) + 1 : 1;
+  const previousAttempts = parseAttemptCount(attemptsValue);
+
+  if (previousAttempts === null) {
+    return enterLockout(storage, Date.now());
+  }
+
+  const attempts = previousAttempts + 1;
 
   if (attempts >= MAX_PIN_ATTEMPTS) {
-    const nextBlockedUntil = Date.now() + PIN_LOCKOUT_MS;
-
-    await storage.set(SECURITY_STORAGE_KEYS.failedAttempts, "0");
-
-    await storage.set(
-      SECURITY_STORAGE_KEYS.blockedUntil,
-      String(nextBlockedUntil),
-    );
-
-    return {
-      ok: false,
-      reason: "locked",
-      retryAfterMs: PIN_LOCKOUT_MS,
-    };
+    return enterLockout(storage, Date.now());
   }
 
   await storage.set(SECURITY_STORAGE_KEYS.failedAttempts, String(attempts));
@@ -267,5 +276,44 @@ export async function verifyPin(
     ok: false,
     reason: "invalid",
     attemptsLeft: MAX_PIN_ATTEMPTS - attempts,
+  };
+}
+
+function parseAttemptCount(value: string | null): number | null {
+  if (value === null) {
+    return 0;
+  }
+
+  if (value.trim() === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isSafeInteger(parsed) &&
+    parsed >= 0 &&
+    parsed <= MAX_PIN_ATTEMPTS
+    ? parsed
+    : null;
+}
+
+async function enterLockout(
+  storage: KeyValueStorage,
+  now: number,
+): Promise<Extract<VerifyPinResult, { ok: false; reason: "locked" }>> {
+  await storage.set(
+    SECURITY_STORAGE_KEYS.failedAttempts,
+    String(MAX_PIN_ATTEMPTS),
+  );
+
+  await storage.set(
+    SECURITY_STORAGE_KEYS.blockedUntil,
+    String(now + PIN_LOCKOUT_MS),
+  );
+
+  return {
+    ok: false,
+    reason: "locked",
+    retryAfterMs: PIN_LOCKOUT_MS,
   };
 }

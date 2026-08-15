@@ -8,6 +8,10 @@ import {
   countsAgainstOutflow,
   type TrackedTransaction,
 } from "@/core/transactions/trackedTransaction";
+import {
+  isDecimalString,
+  toBigIntOrNull,
+} from "@/core/storage/decimalString";
 
 import type { PolicyContext } from "./securityPolicy";
 
@@ -68,6 +72,14 @@ export function buildPolicyContext({
       continue;
     }
 
+    // A local record saying "confirmed" is this device's own claim. The
+    // chain branch above demands proof that the transaction was mined; this
+    // one must too, or anything that can write local storage can make an
+    // unknown address look familiar and walk past the first-transfer limit.
+    if (!confirmedOnChain(item)) {
+      continue;
+    }
+
     knownRecipients.add(item.to.toLowerCase());
   }
 
@@ -83,6 +95,18 @@ export function buildPolicyContext({
 
     spentTodayUsd,
   };
+}
+
+// The parts of a local record that only the chain can produce. A record
+// invented in storage can claim any status; it cannot claim a block it was
+// mined in and the gas it actually used.
+export function confirmedOnChain(item: TrackedTransaction): boolean {
+  return (
+    isDecimalString(item.blockNumber) &&
+    isDecimalString(item.gasUsed) &&
+    typeof item.confirmedAt === "number" &&
+    Number.isFinite(item.confirmedAt)
+  );
 }
 
 function countsAsOutflow(
@@ -142,8 +166,11 @@ export function sumTrackedOutflowUsd({
       return total;
     }
 
+    // Clamped at zero: a stored negative would subtract from today's spending
+    // and hand back limit that was already used. Money left this wallet or it
+    // did not; it never came back through an outflow record.
     if (typeof item.valueUsd === "number" && Number.isFinite(item.valueUsd)) {
-      return total + item.valueUsd;
+      return total + Math.max(0, item.valueUsd);
     }
 
     const price = priceOf(item.symbol);
@@ -152,9 +179,13 @@ export function sumTrackedOutflowUsd({
       return total;
     }
 
-    const amount = Number(
-      formatUnits(BigInt(item.valueWei), item.tokenDecimals ?? 18),
-    );
+    const wei = toBigIntOrNull(item.valueWei);
+
+    if (wei === null) {
+      return total;
+    }
+
+    const amount = Number(formatUnits(wei, item.tokenDecimals ?? 18));
 
     if (!Number.isFinite(amount)) {
       return total;

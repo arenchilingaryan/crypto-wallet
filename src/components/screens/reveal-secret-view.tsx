@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Pressable, View } from "react-native";
+import { usePreventScreenCapture } from "expo-screen-capture";
 
 import { PhraseGrid } from "@/components/phrase-grid";
 import { Screen } from "@/components/ui/screen";
@@ -20,6 +21,8 @@ type RevealSecretViewProps = {
 };
 
 export function RevealSecretView({ secret, onBack }: RevealSecretViewProps) {
+  usePreventScreenCapture("wallet-secret-reveal");
+
   const [showPhrase, setShowPhrase] = useState(false);
 
   const [showKey, setShowKey] = useState(false);

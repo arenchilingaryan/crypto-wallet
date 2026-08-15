@@ -4,6 +4,8 @@ import { ActivityIndicator } from "react-native";
 
 import { useRouter } from "expo-router";
 
+import { goBack } from "@/utils/navigation";
+
 import {
   formatEther,
   getAddress,
@@ -263,6 +265,11 @@ export default function SendNativeScreen() {
         to: getAddress(recipient),
 
         value,
+
+        // The review above was about this wallet. If the active one changed
+        // in between, preparation is refused rather than attaching that
+        // review to a different wallet's transaction.
+        expectedWallet: verdict.wallet,
       });
 
       setTransaction(prepared);
@@ -517,7 +524,7 @@ export default function SendNativeScreen() {
         void handleContinue();
       }}
       onBack={() => {
-        router.back();
+        goBack("/send");
       }}
     />
   );

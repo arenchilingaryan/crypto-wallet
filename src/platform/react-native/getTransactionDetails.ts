@@ -1,6 +1,7 @@
 import type { Hash, TransactionReceipt } from "viem";
 
 import { ACTIVE_NETWORK } from "@/constants/networks";
+import { toBigIntOrNull } from "@/core/storage/decimalString";
 
 import {
   resolveDetailsAsset,
@@ -75,18 +76,20 @@ export async function getTransactionDetails(
         nativeSymbol: ACTIVE_NETWORK.nativeSymbol,
       }),
 
-      gasUsed: tracked.gasUsed ? BigInt(tracked.gasUsed) : null,
+      // Read through the shared converter: a stored value that is not a
+      // number is unknown, not a crash on the details screen.
+      gasUsed: toBigIntOrNull(tracked.gasUsed),
 
-      gasPriceWei: tracked.effectiveGasPriceWei
-        ? BigInt(tracked.effectiveGasPriceWei)
-        : null,
+      gasPriceWei: toBigIntOrNull(tracked.effectiveGasPriceWei),
 
       networkFeeWei:
-        tracked.gasUsed && tracked.effectiveGasPriceWei
-          ? BigInt(tracked.gasUsed) * BigInt(tracked.effectiveGasPriceWei)
-          : null,
+        toBigIntOrNull(tracked.gasUsed) === null ||
+        toBigIntOrNull(tracked.effectiveGasPriceWei) === null
+          ? null
+          : (toBigIntOrNull(tracked.gasUsed) as bigint) *
+            (toBigIntOrNull(tracked.effectiveGasPriceWei) as bigint),
 
-      blockNumber: tracked.blockNumber ? BigInt(tracked.blockNumber) : null,
+      blockNumber: toBigIntOrNull(tracked.blockNumber),
 
       timestamp: tracked.confirmedAt ?? tracked.createdAt,
 

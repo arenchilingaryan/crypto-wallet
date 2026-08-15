@@ -35,6 +35,11 @@ type PolicyViewProps = {
 
   enforced: boolean;
 
+  // True when the stored policy could not be read. The fields below then show
+  // blanks that are not the user's choices, and everything priced is blocked
+  // until they are saved again.
+  unreadable: boolean;
+
   saving: boolean;
 
   saved: boolean;
@@ -78,6 +83,10 @@ export function draftToPolicy(
 
     version: 1,
 
+    // Whatever the previous read reported, what the user is about to save is
+    // by definition a policy we can account for.
+    availability: "configured",
+
     maxSingleTransferUsd: parse(draft.maxSingleTransferUsd),
 
     newRecipientMaxUsd: parse(draft.newRecipientMaxUsd),
@@ -94,6 +103,7 @@ export function PolicyView({
   draft,
   networkName,
   enforced,
+  unreadable,
   saving,
   saved,
   onChange,
@@ -114,7 +124,15 @@ export function PolicyView({
         subtitle="Rules checked before a transfer, an approval or a swap is prepared or signed."
       />
 
-      {!hasAnyRule && (
+      {unreadable && (
+        <AppText variant="caption" tone="warning" style={styles.notice}>
+          Your saved limits could not be read, so the fields below are empty
+          rather than yours. Until you save them again, transfers, approvals
+          and swaps are refused instead of being waved through.
+        </AppText>
+      )}
+
+      {!unreadable && !hasAnyRule && (
         <AppText variant="caption" tone="muted" style={styles.notice}>
           No dollar limit is set. Unlimited approvals and unknown contracts are
           still refused; everything else passes.

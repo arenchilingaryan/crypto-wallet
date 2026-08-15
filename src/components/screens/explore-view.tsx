@@ -75,17 +75,6 @@ export function ExploreView({
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open your watchlist"
-          onPress={onOpenWatchlist}
-          style={styles.iconButton}
-        >
-          <AppText variant="label" tone="accent">
-            ★
-          </AppText>
-        </Pressable>
-
-        <Pressable
-          accessibilityRole="button"
           accessibilityLabel="Search assets"
           onPress={onSearch}
           style={styles.iconButton}
@@ -116,6 +105,37 @@ export function ExploreView({
           );
         })}
       </View>
+
+      {/* A destination, not a decoration: the watchlist is a peer of the market
+          lists above, so it gets a full-width row with a real label and a
+          thumb-sized target instead of a bare glyph squeezed into the header. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open your watchlist"
+        onPress={onOpenWatchlist}
+        style={({ pressed }) => [
+          styles.watchlistRow,
+          pressed && styles.watchlistRowPressed,
+        ]}
+      >
+        <View style={styles.watchlistBadge}>
+          <AppText variant="bodyStrong" tone="accent">
+            ★
+          </AppText>
+        </View>
+
+        <View style={styles.watchlistText}>
+          <AppText variant="bodyStrong">Watchlist</AppText>
+
+          <AppText variant="caption" tone="muted">
+            Tokens you follow without holding them
+          </AppText>
+        </View>
+
+        <AppText variant="bodyStrong" tone="muted">
+          ›
+        </AppText>
+      </Pressable>
 
       <AppText variant="caption" tone="muted" style={styles.notice}>
         Ranked by DEX pool activity. Check liquidity and pool age before

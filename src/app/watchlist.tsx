@@ -13,6 +13,8 @@ import { ACTIVE_NETWORK } from "@/constants/networks";
 
 import { getPortfolio } from "@/core/blockchain/getPortfolio";
 import { assetRouteParams } from "@/core/navigation/assetRoute";
+
+import { goBack } from "@/utils/navigation";
 import { getTokenMetadata } from "@/core/blockchain/getTokenMetadata";
 import {
   UNKNOWN,
@@ -446,7 +448,7 @@ export default function WatchlistScreen() {
         router.push("/search");
       }}
       onBack={() => {
-        router.back();
+        goBack("/explore");
       }}
     />
   );

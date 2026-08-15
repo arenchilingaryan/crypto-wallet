@@ -16,4 +16,12 @@ export interface SecretStore {
   save(walletId: string, secret: WalletSecret): Promise<SecretSaveResult>;
 
   remove(walletId: string): Promise<void>;
+
+  /**
+   * Drops an in-memory staged copy and nothing else. Used to abandon a save
+   * that reported `durable: false`. It must never touch durable storage:
+   * the same wallet id may already own a sealed secret that predates this
+   * attempt, and deleting that would destroy the only copy of a live wallet.
+   */
+  discardStaged(walletId: string): Promise<void>;
 }

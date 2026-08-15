@@ -107,6 +107,10 @@ export const expoSecretStore = {
     return localStorage.getItem(getSecretKey(walletId));
   },
 
+  async discardStaged(walletId: string) {
+    clearPendingSecret(walletId);
+  },
+
   async remove(walletId: string) {
     clearPendingSecret(walletId);
 

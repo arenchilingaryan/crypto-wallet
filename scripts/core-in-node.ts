@@ -263,6 +263,8 @@ function createMemorySecretStore(): SecretStore {
     async remove(walletId) {
       map.delete(walletId);
     },
+
+    async discardStaged() {},
   };
 }
 
@@ -1244,6 +1246,7 @@ export async function main() {
 
   const policy: SecurityPolicy = {
     version: 1,
+    availability: "configured",
     maxSingleTransferUsd: 5000,
     newRecipientMaxUsd: 300,
     dailyOutflowLimitUsd: 10000,
@@ -1286,12 +1289,12 @@ export async function main() {
         valueWei: (10n ** 18n).toString(),
         createdAt: Date.now() - 3_600_000,
         status: "confirmed",
-        blockNumber: null,
-        gasUsed: null,
+        blockNumber: "18000000",
+        gasUsed: "21000",
         gasLimit: "200000",
         route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
-        confirmedAt: null,
+        confirmedAt: 1,
       },
     ] as never,
     priceOf: (symbol) => (symbol === "ETH" ? 2000 : null),
@@ -1364,6 +1367,7 @@ export async function main() {
       { recipient: "0x00000000000000000000000000000000000000Ff", amountUsd: null },
       {
         version: 1,
+        availability: "configured",
         maxSingleTransferUsd: null,
         newRecipientMaxUsd: null,
         dailyOutflowLimitUsd: null,
@@ -1384,6 +1388,7 @@ export async function main() {
 
   const strictPolicy: SecurityPolicy = {
     version: 1,
+    availability: "configured",
     maxSingleTransferUsd: 1000,
     newRecipientMaxUsd: null,
     dailyOutflowLimitUsd: null,
@@ -1638,6 +1643,7 @@ export async function main() {
     intent: { kind: "transfer", recipient: stranger, amountUsd: 999_999 },
     policy: {
       version: 1,
+      availability: "configured",
       maxSingleTransferUsd: null,
       newRecipientMaxUsd: null,
       dailyOutflowLimitUsd: null,
@@ -1862,6 +1868,7 @@ export async function main() {
           bump();
           sec.delete(walletId);
         },
+        async discardStaged() {},
       },
     };
   }
@@ -1989,6 +1996,7 @@ export async function main() {
           if (counter === failAt) throw new Error("device died mid-write");
           return stores.secrets.remove(walletId);
         },
+        async discardStaged() {},
       },
       random: nodeRandom,
     });
@@ -3031,6 +3039,8 @@ export async function main() {
     async remove(walletId) {
       vaultBlobs.delete(walletId);
     },
+
+    async discardStaged() {},
   };
 
   const vaultEngine = createWalletEngine({
@@ -3575,7 +3585,7 @@ export async function main() {
     gasLimit: "200000",
     route: "Uniswap V3, direct pool",
     effectiveGasPriceWei: null,
-    confirmedAt: null,
+    confirmedAt: 1,
   };
 
   const chainCredit = {
@@ -3896,12 +3906,12 @@ export async function main() {
         valueUsd: 30000,
         createdAt: Date.now() - 60_000,
         status: "confirmed",
-        blockNumber: null,
-        gasUsed: null,
+        blockNumber: "18000000",
+        gasUsed: "21000",
         gasLimit: "200000",
         route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
-        confirmedAt: null,
+        confirmedAt: 1,
       },
       {
         version: 1,
@@ -3917,12 +3927,12 @@ export async function main() {
         valueUsd: 4000,
         createdAt: Date.now() - 60_000,
         status: "confirmed",
-        blockNumber: null,
-        gasUsed: null,
+        blockNumber: "18000000",
+        gasUsed: "21000",
         gasLimit: "200000",
         route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
-        confirmedAt: null,
+        confirmedAt: 1,
       },
     ] as never,
     priceOf: () => null,
@@ -3955,7 +3965,7 @@ export async function main() {
         gasLimit: "200000",
         route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
-        confirmedAt: null,
+        confirmedAt: 1,
       },
     ] as never,
     priceOf: () => 2000,
@@ -4031,12 +4041,12 @@ export async function main() {
         valueWei: "10000000000000000",
         createdAt: Date.now(),
         status: "confirmed",
-        blockNumber: null,
-        gasUsed: null,
+        blockNumber: "18000000",
+        gasUsed: "21000",
         gasLimit: "200000",
         route: "Uniswap V3, direct pool",
         effectiveGasPriceWei: null,
-        confirmedAt: null,
+        confirmedAt: 1,
       },
     ] as never,
     priceOf: () => 2000,
@@ -4551,7 +4561,7 @@ export async function main() {
     effectiveGasPriceWei: null,
     nativeSymbol: "ETH",
     quotedAt: null,
-    confirmedAt: null,
+    confirmedAt: 1,
   });
 
   check(
@@ -4574,7 +4584,7 @@ export async function main() {
     effectiveGasPriceWei: null,
     nativeSymbol: "ETH",
     quotedAt: null,
-    confirmedAt: null,
+    confirmedAt: 1,
   });
 
   check(
@@ -5123,7 +5133,7 @@ export async function main() {
 
   const crashedBeforeRpc = resolveBroadcast({
     receipt: null,
-    transactionSeen: false,
+    presence: "not-found" as const,
     accountNonce: 7,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5137,7 +5147,7 @@ export async function main() {
 
   const answerLost = resolveBroadcast({
     receipt: null,
-    transactionSeen: true,
+    presence: "seen" as const,
     accountNonce: 7,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5151,7 +5161,7 @@ export async function main() {
 
   const stillWaiting = resolveBroadcast({
     receipt: null,
-    transactionSeen: false,
+    presence: "not-found" as const,
     accountNonce: 7,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5165,7 +5175,7 @@ export async function main() {
 
   const superseded = resolveBroadcast({
     receipt: null,
-    transactionSeen: false,
+    presence: "not-found" as const,
     accountNonce: 9,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5179,7 +5189,7 @@ export async function main() {
 
   const mined = resolveBroadcast({
     receipt: "success",
-    transactionSeen: true,
+    presence: "seen" as const,
     accountNonce: 9,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5187,7 +5197,7 @@ export async function main() {
 
   const minedAndFailed = resolveBroadcast({
     receipt: "reverted",
-    transactionSeen: true,
+    presence: "seen" as const,
     accountNonce: 9,
     txNonce: 7,
     hasSignedTransaction: true,
@@ -5204,7 +5214,7 @@ export async function main() {
 
   const nothingToResend = resolveBroadcast({
     receipt: null,
-    transactionSeen: false,
+    presence: "not-found" as const,
     accountNonce: 7,
     txNonce: 7,
     hasSignedTransaction: false,
@@ -5218,7 +5228,7 @@ export async function main() {
 
   const unknownNonce = resolveBroadcast({
     receipt: null,
-    transactionSeen: false,
+    presence: "not-found" as const,
     accountNonce: null,
     txNonce: null,
     hasSignedTransaction: true,
@@ -5228,6 +5238,36 @@ export async function main() {
     "an unreadable nonce never writes a transfer off as dead",
     unknownNonce.action === "rebroadcast",
     "silence about the nonce is not proof it can never run",
+  );
+
+  const providerSilent = resolveBroadcast({
+    receipt: null,
+    presence: "unknown" as const,
+    accountNonce: 9,
+    txNonce: 7,
+    hasSignedTransaction: true,
+  });
+
+  check(
+    "a provider that could not answer never supersedes a live transfer",
+    providerSilent.action === "wait",
+    `resolution: ${providerSilent.action}`,
+  );
+
+  const providerSilentWithoutBytes = resolveBroadcast({
+    receipt: null,
+    presence: "unknown" as const,
+    accountNonce: null,
+    txNonce: 7,
+    hasSignedTransaction: false,
+  });
+
+  check(
+    "an unanswered lookup counts against the daily limit until the chain says otherwise",
+    providerSilentWithoutBytes.action === "wait" &&
+      countsAgainstOutflow("broadcast-unknown") &&
+      countsAgainstOutflow("pending"),
+    "uncertainty keeps the amount on the books",
   );
 
   const liveQuotedAt = 1_786_000_000_000;
@@ -5321,7 +5361,7 @@ export async function main() {
     status: "broadcast-pending",
     quotedAt: liveQuotedAt,
     broadcastAt: null,
-    confirmedAt: null,
+    confirmedAt: 1,
     blockNumber: null,
     hash: "0xdead",
   });
@@ -5331,7 +5371,7 @@ export async function main() {
     status: "broadcast-unknown",
     quotedAt: liveQuotedAt,
     broadcastAt: null,
-    confirmedAt: null,
+    confirmedAt: 1,
     blockNumber: null,
     hash: "0xdead",
   });
@@ -5370,7 +5410,7 @@ export async function main() {
     status: "superseded",
     quotedAt: liveQuotedAt,
     broadcastAt: null,
-    confirmedAt: null,
+    confirmedAt: 1,
     blockNumber: null,
     hash: "0xdead",
   });
@@ -5433,7 +5473,7 @@ export async function main() {
       routeLabel: null,
       effectiveGasPriceWei: null,
       createdAt: liveQuotedAt,
-      confirmedAt: null,
+      confirmedAt: 1,
     },
     "ETH",
   );
@@ -5763,6 +5803,8 @@ export async function main() {
     async remove(walletId) {
       migratingMap.delete(walletId);
     },
+
+    async discardStaged() {},
   };
 
   const legacyEngine = createWalletEngine({
@@ -6439,6 +6481,9 @@ export async function main() {
         to: Y,
         status: "confirmed",
         createdAt: nowMs,
+        blockNumber: "18000000",
+        gasUsed: "21000",
+        confirmedAt: nowMs,
         valueUsd: 0,
         valueWei: "0",
         tokenDecimals: 18,
@@ -6450,6 +6495,9 @@ export async function main() {
         to: ROUTER,
         status: "confirmed",
         createdAt: nowMs,
+        blockNumber: "18000000",
+        gasUsed: "21000",
+        confirmedAt: nowMs,
         valueUsd: 0,
         valueWei: "0",
         tokenDecimals: 18,
@@ -7298,6 +7346,8 @@ export async function main() {
           async remove() {
             value = null;
           },
+
+          async discardStaged() {},
         },
 
         read: () => value,
@@ -7735,13 +7785,13 @@ export async function main() {
         },
       })) as unknown as typeof fetch;
 
-      const rateLimited = await searchNetworkTokens("chainlink");
+      const rateLimited = await searchNetworkTokens("chainlink", "eth");
 
       globalThis.fetch = (async () => {
         throw new Error("network down");
       }) as unknown as typeof fetch;
 
-      const offline = await searchNetworkTokens("chainlink");
+      const offline = await searchNetworkTokens("chainlink", "eth");
 
       globalThis.fetch = (async () => ({
         ok: true,
@@ -7751,7 +7801,7 @@ export async function main() {
         },
       })) as unknown as typeof fetch;
 
-      const answered = await searchNetworkTokens("chainlink");
+      const answered = await searchNetworkTokens("chainlink", "eth");
 
       check(
         "a token catalogue that rate-limits or is offline is reported as unavailable, not as no matches",
@@ -7759,6 +7809,14 @@ export async function main() {
           offline.catalogue === "unavailable" &&
           answered.catalogue === "complete",
         `429: ${rateLimited.catalogue}, offline: ${offline.catalogue}, ok: ${answered.catalogue}`,
+      );
+
+      const noCatalogue = await searchNetworkTokens("chainlink", null);
+
+      check(
+        "on a network with no wider catalogue the local list is the whole truth, not a degraded one",
+        noCatalogue.catalogue === "complete",
+        `no-catalogue network reports: ${noCatalogue.catalogue}`,
       );
 
       check(

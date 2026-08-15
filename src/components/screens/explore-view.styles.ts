@@ -57,6 +57,50 @@ export const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceAlt,
   },
 
+  watchlistRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: Spacing.md,
+
+    marginTop: Spacing.lg,
+
+    // Comfortably above the ~44pt minimum touch target.
+    minHeight: 64,
+
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+
+    backgroundColor: Colors.surface,
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+  },
+
+  watchlistRowPressed: {
+    backgroundColor: Colors.surfaceAlt,
+  },
+
+  watchlistBadge: {
+    width: 36,
+    height: 36,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: Radius.full,
+
+    backgroundColor: Colors.surfaceAlt,
+  },
+
+  watchlistText: {
+    flex: 1,
+
+    gap: 2,
+  },
+
   notice: {
     marginTop: Spacing.lg,
   },

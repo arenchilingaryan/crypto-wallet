@@ -11,6 +11,9 @@ import { Screen } from "@/components/ui/screen";
 
 import { Colors } from "@/constants/theme";
 
+import { describeImportFailure } from "@/core/wallet/describeImportFailure";
+import { importWallet } from "@/core/wallet/importWallet";
+
 import { securityApi } from "@/platform/react-native/securityApi";
 import { walletApi } from "@/platform/react-native/walletApi";
 
@@ -32,8 +35,13 @@ type WalletState =
       mnemonic: string;
     }
   | {
+      // The PIN is set before the wallet is committed, so the phrase is still
+      // only in the user's hands and in this state. Nothing has been written
+      // to the registry yet: abandoning here leaves no trace.
       status: "securitySetup";
       address: Address;
+      mnemonic: string;
+      mode: "create" | "import";
     };
 
 export default function OnboardingScreen() {
@@ -89,17 +97,35 @@ export default function OnboardingScreen() {
     };
   }, [router]);
 
-  async function finishWalletSetup(address: Address) {
+  // A wallet is only committed once there is a vault to seal its phrase into.
+  // Until the PIN exists the phrase would be staged in process memory alone,
+  // and a crash in that window used to leave a wallet in the registry whose
+  // secret had evaporated.
+  async function commitWallet(mnemonic: string, mode: "create" | "import") {
+    if (mode === "create") {
+      await walletApi.create(mnemonic);
+    } else {
+      await walletApi.importFromMnemonic(mnemonic);
+    }
+  }
+
+  async function continueWith(mnemonic: string, mode: "create" | "import") {
+    const { address } = importWallet(mnemonic);
+
     const pinConfigured = await securityApi.hasPin();
 
     if (!pinConfigured) {
       setWalletState({
         status: "securitySetup",
         address,
+        mnemonic,
+        mode,
       });
 
       return;
     }
+
+    await commitWallet(mnemonic, mode);
 
     router.replace("/");
   }
@@ -108,15 +134,13 @@ export default function OnboardingScreen() {
     try {
       setImportError(null);
 
-      const account = await walletApi.importFromMnemonic(importMnemonic);
-
-      await finishWalletSetup(account.address);
+      await continueWith(importMnemonic, "import");
 
       setImportMnemonic("");
     } catch (error) {
       console.error("Wallet import failed:", error);
 
-      setImportError("Invalid recovery phrase");
+      setImportError(describeImportFailure(error));
     }
   }
 
@@ -177,9 +201,7 @@ export default function OnboardingScreen() {
     }
 
     try {
-      const account = await walletApi.create(walletState.mnemonic);
-
-      await finishWalletSetup(account.address);
+      await continueWith(walletState.mnemonic, "create");
     } catch (error) {
       console.error("Wallet creation failed:", error);
 
@@ -273,12 +295,21 @@ export default function OnboardingScreen() {
     );
   }
 
+  const pending = walletState;
+
   return (
     <PinView
       mode="setup"
       onSubmit={async (pin) => {
         try {
+          // Vault first, wallet second: after this the secret store has
+          // somewhere durable to write, so the commit either completes or
+          // leaves nothing at all.
           await securityApi.setupPin(pin);
+
+          await commitWallet(pending.mnemonic, pending.mode);
+
+          setImportMnemonic("");
 
           router.replace("/");
 

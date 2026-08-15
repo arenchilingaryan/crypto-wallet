@@ -4,6 +4,8 @@ import { ActivityIndicator } from "react-native";
 
 import { useLocalSearchParams, useRouter } from "expo-router";
 
+import { goBack } from "@/utils/navigation";
+
 import {
   formatUnits,
   getAddress,
@@ -369,6 +371,10 @@ export default function SendErc20Screen() {
         tokenSymbol: token.symbol,
 
         tokenDecimals: token.decimals,
+
+        // Bound to the wallet the review above was about; a switch in between
+        // refuses preparation instead of reusing another wallet's review.
+        expectedWallet: verdict.wallet,
       });
 
       setTransaction(prepared);
@@ -498,7 +504,7 @@ export default function SendErc20Screen() {
     return (
       <Screen
         onBack={() => {
-          router.back();
+          goBack("/send");
         }}
       >
         <AppText variant="bodyStrong" tone="danger">
@@ -512,7 +518,7 @@ export default function SendErc20Screen() {
     return (
       <Screen
         onBack={() => {
-          router.back();
+          goBack("/send");
         }}
         style={{
           alignItems: "center",
@@ -637,7 +643,7 @@ export default function SendErc20Screen() {
       }}
       onContinue={handleContinue}
       onBack={() => {
-        router.back();
+        goBack("/send");
       }}
       balanceToken={formatUnits(token.balance, token.decimals)}
       networkFeeEth={
