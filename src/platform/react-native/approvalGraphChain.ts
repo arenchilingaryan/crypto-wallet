@@ -12,9 +12,10 @@ import { ethereumPublicClient } from "./ethereumPublicClient";
 
 // ERC-20 `Approval(owner, spender, value)`. Indexing owner lets the node return
 // only this wallet's approvals across every token contract in one query, so we
-// never have to know the token list up front. (ERC-721's single-token approval
-// shares this signature; such tokens surface as unreadable allowances, which
-// the graph reports as uncertain rather than as fake ERC-20 permissions.)
+// never have to know the token list up front. ERC-721's approval event shares
+// this name but indexes its third argument, so it does not decode against this
+// signature and is dropped here rather than being mistaken for an ERC-20
+// permission; NFT approvals are out of this scan's scope either way.
 const APPROVAL_EVENT = parseAbiItem(
   "event Approval(address indexed owner, address indexed spender, uint256 value)",
 );

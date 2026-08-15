@@ -120,7 +120,35 @@ import {
   approvalExposureUsd,
   getApprovals,
   scoreApproval,
+  type ApprovalScan,
+  type TokenApproval,
 } from "@/core/blockchain/getApprovals";
+import { buildSecurityReview } from "@/core/security/securityReviewSummary";
+import {
+  addWatched,
+  canEnrichOnNetwork,
+  isWatched,
+  MAX_WATCHLIST_ITEMS,
+  removeWatched,
+  sameWatchedAsset,
+  searchWatchlist,
+  sortWatchlist,
+  watchKey,
+} from "@/core/watchlist/watchlist";
+import {
+  parseWatchlist,
+  serializeWatchlist,
+  WATCHLIST_STORAGE_KEY,
+} from "@/core/watchlist/storage";
+import { runBounded } from "@/core/watchlist/refreshQueue";
+import { createWatchlistStore } from "@/core/watchlist/watchlistStore";
+import {
+  assetRouteKey,
+  assetRouteParams,
+  parseRouteChainId,
+} from "@/core/navigation/assetRoute";
+import { buildWatchRowObservation } from "@/core/watchlist/observation";
+import type { WatchedToken } from "@/core/watchlist/types";
 import {
   chunkRange,
   computeCoverage,
@@ -1652,6 +1680,28 @@ export async function main() {
       }) === "critical",
   );
 
+  check(
+    "an unlimited approval to an unknown spender is critical even at zero or unknown current exposure",
+    scoreApproval({
+      unlimited: true,
+      exposureUsd: 0,
+      spenderKnown: false,
+    }) === "critical" &&
+      scoreApproval({
+        unlimited: true,
+        exposureUsd: null,
+        spenderKnown: false,
+        holdsTokens: false,
+      }) === "critical" &&
+      scoreApproval({
+        unlimited: true,
+        exposureUsd: null,
+        spenderKnown: false,
+        holdsTokens: true,
+      }) === "critical",
+    "a standing unlimited authorization to an unknown contract is never downgraded by a $0 or empty balance",
+  );
+
   const lifecycleStorage = createMemoryStorage();
 
   const lifecycleSecrets = createMemorySecretStore();
@@ -2210,6 +2260,7 @@ export async function main() {
       name: "USD Coin",
       balance,
       decimals: 6,
+      decimalsKnown: true,
       priceUsd,
       valueUsd: priceUsd === null ? null : Number(balance) * priceUsd,
       logo: null,
@@ -2583,6 +2634,47 @@ export async function main() {
     unknownBudget.uncertainCount === 1 &&
       unknownBudget.approvals.every((row) => !row.exposureCertain),
     `uncertain rows: ${unknownBudget.uncertainCount}`,
+  );
+
+  check(
+    "a budget probe that failed is counted as a read that did not happen",
+    unknownBudget.unreadBudgetCount === 1 && twoSpenders.unreadBudgetCount === 0,
+    `unread budgets: ${unknownBudget.unreadBudgetCount} on failure, ${twoSpenders.unreadBudgetCount} on success`,
+  );
+
+  const unreadPermit2 = await getApprovals(
+    generated.address,
+    [usdcAsset("10000")],
+    MAINNET,
+    {
+      async multicall({
+        contracts,
+      }: {
+        contracts: { address: string; args: readonly unknown[] }[];
+      }) {
+        return contracts.map((call) => {
+          // The ERC-20 budget reads fine; every per-spender Permit2 lookup dies.
+          if (call.address.toLowerCase() === PERMIT2.toLowerCase()) {
+            return { status: "failure" as const, error: new Error("node down") };
+          }
+
+          return {
+            status: "success" as const,
+            result:
+              String(call.args[1]).toLowerCase() === PERMIT2.toLowerCase()
+                ? 500_000_000n
+                : 0n,
+          };
+        });
+      },
+    } as unknown as Parameters<typeof getApprovals>[3],
+  );
+
+  check(
+    "failed Permit2 lookups are counted, so a live budget with no readable spenders is not silence",
+    unreadPermit2.unreadPermit2Count > 0 &&
+      twoSpenders.unreadPermit2Count === 0,
+    `unread lookups: ${unreadPermit2.unreadPermit2Count} on failure, ${twoSpenders.unreadPermit2Count} on success`,
   );
 
   const unpriced = await getApprovals(
@@ -3949,6 +4041,7 @@ export async function main() {
     name: "Ethereum",
     balance: "2",
     decimals: 18,
+    decimalsKnown: true,
     priceUsd: 2000,
     valueUsd: 4000,
     logo: null,
@@ -3960,6 +4053,7 @@ export async function main() {
     name: "USDC",
     balance: "17",
     decimals: 6,
+    decimalsKnown: true,
     priceUsd: null,
     valueUsd: null,
     logo: null,
@@ -6357,6 +6451,1105 @@ export async function main() {
       knownCtx.knownRecipients.includes(Y.toLowerCase()) &&
         !knownCtx.knownRecipients.includes(ROUTER.toLowerCase()),
       `known [${knownCtx.knownRecipients.join(", ")}]`,
+    );
+  }
+
+  // ---- Security Review v1: honest aggregation of Permission Graph ------------
+  //
+  // No score, no global "SAFE". Coverage gates the headline; out-of-scope areas
+  // (token/recipient) are boundaries, not gaps, so a complete permission scan
+  // is not falsely "incomplete"; an empty wallet is neutral, not green; and
+  // undeterminable exposure ranks above any finite amount.
+  {
+    const mkApproval = (o: Partial<TokenApproval>): TokenApproval => ({
+      id: "a1",
+      channel: "erc20",
+      token: "0x0000000000000000000000000000000000000001" as Address,
+      tokenSymbol: "USDC",
+      tokenName: "USD Coin",
+      tokenDecimals: 6,
+      tokenLogo: null,
+      spender: "0x0000000000000000000000000000000000000002" as Address,
+      spenderName: "Unknown contract",
+      spenderPurpose: "Unrecognised spender",
+      allowance: 1n,
+      unlimited: false,
+      allowanceCertain: true,
+      decimalsCertain: true,
+      expiresAt: null,
+      exposureUsd: 100,
+      exposureCertain: true,
+      risk: "high",
+      ...o,
+    });
+
+    const mkScan = (o: Partial<ApprovalScan>): ApprovalScan => ({
+      approvals: [],
+      totalExposureUsd: 0,
+      checkedTokens: 1,
+      checkedSpenders: 2,
+      expiredCount: 0,
+      uncertainCount: 0,
+      coverage: "complete",
+      unknownSpenderCount: 0,
+      unreadBudgetCount: 0,
+      unreadPermit2Count: 0,
+      permit2SpendersChecked: 5,
+      ...o,
+    });
+
+    // THE scoping test: a complete permission scan with only benign approvals is
+    // "reviewed", and the out-of-scope token/recipient boundaries do NOT drag it
+    // to "incomplete".
+    const clean = buildSecurityReview(
+      mkScan({ approvals: [mkApproval({ risk: "low" })] }),
+    );
+
+    check(
+      "an in-scope-complete review is 'reviewed' — out-of-scope areas are boundaries, not coverage gaps",
+      clean.state === "reviewed" &&
+        clean.coverageGaps.length === 0 &&
+        clean.notIncluded.length === 3,
+      `state ${clean.state}, gaps ${clean.coverageGaps.length}, notIncluded ${clean.notIncluded.length}`,
+    );
+
+    const partialClean = buildSecurityReview(
+      mkScan({ approvals: [mkApproval({ risk: "low" })], coverage: "partial" }),
+    );
+
+    check(
+      "partial permission history with zero findings is 'incomplete', never a clean 'reviewed'",
+      partialClean.state === "incomplete",
+      `state ${partialClean.state}`,
+    );
+
+    const attention = buildSecurityReview(
+      mkScan({ approvals: [mkApproval({ risk: "critical", exposureUsd: 4230 })] }),
+    );
+
+    check(
+      "a high/critical approval on a complete scan needs attention",
+      attention.state === "attention" && attention.openItems.length === 1,
+      `state ${attention.state}, items ${attention.openItems.length}`,
+    );
+
+    const findingAndGap = buildSecurityReview(
+      mkScan({ approvals: [mkApproval({ risk: "critical" })], coverage: "partial" }),
+    );
+
+    check(
+      "findings still surface, but an incomplete scan leads with 'incomplete'",
+      findingAndGap.state === "incomplete" && findingAndGap.openItems.length === 1,
+      `state ${findingAndGap.state}, items ${findingAndGap.openItems.length}`,
+    );
+
+    const emptyWallet = buildSecurityReview(
+      mkScan({ approvals: [], checkedTokens: 0 }),
+    );
+
+    check(
+      "an empty wallet is 'nothing to review yet', never a green all-clear",
+      emptyWallet.state === "neutral",
+      `state ${emptyWallet.state}`,
+    );
+
+    const ranked = buildSecurityReview(
+      mkScan({
+        approvals: [
+          mkApproval({ id: "finite", risk: "high", exposureUsd: 5000 }),
+          mkApproval({ id: "unknown", risk: "high", exposureUsd: null }),
+        ],
+      }),
+    );
+
+    check(
+      "an approval whose exposure could not be determined ranks above any finite amount",
+      ranked.openItems[0]?.subjectRef === "unknown" &&
+        ranked.openItems[1]?.subjectRef === "finite",
+      `order ${ranked.openItems.map((i) => i.subjectRef).join(">")}`,
+    );
+
+    const unreadable = buildSecurityReview(
+      mkScan({ approvals: [mkApproval({ risk: "critical", allowanceCertain: false })] }),
+    );
+
+    check(
+      "an unreadable permission is a coverage gap, not a finding, and never silently dropped",
+      unreadable.state === "incomplete" &&
+        unreadable.openItems.length === 0 &&
+        unreadable.coverageGaps.length === 1,
+      `state ${unreadable.state}, items ${unreadable.openItems.length}, gaps ${unreadable.coverageGaps.length}`,
+    );
+
+    const counted = buildSecurityReview(
+      mkScan({
+        approvals: [
+          mkApproval({ id: "f1", risk: "critical" }),
+          mkApproval({ id: "u1", risk: "critical", allowanceCertain: false }),
+          mkApproval({ id: "u2", risk: "high", allowanceCertain: false }),
+        ],
+      }),
+    );
+
+    check(
+      "findings and unread permissions are counted side by side, never summed into one total",
+      counted.openItems.length === 1 && counted.unverifiedPermissionCount === 2,
+      `${counted.openItems.length} active, ${counted.unverifiedPermissionCount} unverified`,
+    );
+
+    // "Nothing to review yet" asserts that we looked and found nothing. When
+    // the looking failed, the honest state is the unfinished check, not the
+    // absence.
+    const emptyAndPartial = buildSecurityReview(
+      mkScan({ approvals: [], checkedTokens: 0, coverage: "partial" }),
+    );
+
+    check(
+      "an empty wallet whose history could not be read is incomplete, not an established absence",
+      emptyAndPartial.state === "incomplete",
+      `state ${emptyAndPartial.state}`,
+    );
+
+    // The exposure total silently omits every row it cannot price. Count those
+    // rows so the headline figure is never mistaken for the whole picture.
+    const unvalued = buildSecurityReview(
+      mkScan({
+        approvals: [
+          mkApproval({ id: "priced", exposureUsd: 100 }),
+          mkApproval({ id: "unpriced", exposureUsd: null }),
+          mkApproval({ id: "unread", allowanceCertain: false }),
+        ],
+      }),
+    );
+
+    check(
+      "permissions that carry no dollar figure are counted apart from the exposure total",
+      unvalued.unvaluedPermissionCount === 2,
+      `${unvalued.unvaluedPermissionCount} unvalued of ${unvalued.reviewedPermissionCount + unvalued.unverifiedPermissionCount}`,
+    );
+
+    // A Permit2 row whose ERC-20 budget could not be read still produces a
+    // number. That number is not a verified fact, so the review must not call
+    // itself finished on the strength of it.
+    const unconfirmed = buildSecurityReview(
+      mkScan({
+        unreadBudgetCount: 1,
+        approvals: [
+          mkApproval({
+            id: "permit2",
+            channel: "permit2",
+            risk: "medium",
+            exposureUsd: 1000,
+            exposureCertain: false,
+          }),
+        ],
+      }),
+    );
+
+    check(
+      "a dollar figure resting on a failed read opens a coverage gap instead of a clean review",
+      unconfirmed.state === "incomplete" &&
+        unconfirmed.coverageGaps.some((gap) =>
+          gap.reason.includes("Permit2 budget"),
+        ),
+      `state ${unconfirmed.state}, gaps ${unconfirmed.coverageGaps.length}`,
+    );
+
+    // The same failed read on a token we cannot price leaves no figure at all —
+    // it must still be reported, or the silence reads as a finished review.
+    const unconfirmedUnpriced = buildSecurityReview(
+      mkScan({
+        unreadBudgetCount: 1,
+        approvals: [
+          mkApproval({
+            id: "permit2-unpriced",
+            channel: "permit2",
+            risk: "medium",
+            exposureUsd: null,
+            exposureCertain: false,
+          }),
+        ],
+      }),
+    );
+
+    check(
+      "a failed budget read on an unpriced token is reported too, not hidden behind a missing figure",
+      unconfirmedUnpriced.state === "incomplete",
+      `state ${unconfirmedUnpriced.state}, gaps ${unconfirmedUnpriced.coverageGaps.length}`,
+    );
+
+    // An unpriced token on its own is not a failed read: it must not make the
+    // review permanently incomplete.
+    const merelyUnpriced = buildSecurityReview(
+      mkScan({
+        approvals: [
+          mkApproval({ risk: "low", exposureUsd: null, exposureCertain: false }),
+        ],
+      }),
+    );
+
+    check(
+      "a token we simply cannot price does not make the review incomplete forever",
+      merelyUnpriced.state === "reviewed",
+      `state ${merelyUnpriced.state}`,
+    );
+
+    // A live budget whose per-spender lookups all failed leaves no rows at all.
+    // Silence there must not be read as "no Permit2 permissions".
+    const unreadLookups = buildSecurityReview(
+      mkScan({
+        unreadPermit2Count: 3,
+        approvals: [mkApproval({ risk: "low" })],
+      }),
+    );
+
+    check(
+      "failed Permit2 lookups are reported instead of passing for an absence of permissions",
+      unreadLookups.state === "incomplete" &&
+        unreadLookups.coverageGaps.some((gap) =>
+          gap.reason.includes("could not be read"),
+        ),
+      `state ${unreadLookups.state}, gaps ${unreadLookups.coverageGaps.length}`,
+    );
+
+    // A channel that was never queried at all is the same class of silence as a
+    // failed read: it must not pass for "nothing found".
+    const permit2Unasked = buildSecurityReview(
+      mkScan({
+        permit2SpendersChecked: 0,
+        approvals: [mkApproval({ risk: "low" })],
+      }),
+    );
+
+    check(
+      "a Permit2 channel that was never queried is stated as a standing limit, not a retryable gap",
+      permit2Unasked.coverageGaps.length === 0 &&
+        permit2Unasked.notIncluded.some(
+          (boundary) =>
+            boundary.area.includes("Permit2") &&
+            boundary.detail.includes("not checked on this network"),
+        ),
+      `state ${permit2Unasked.state}, gaps ${permit2Unasked.coverageGaps.length}`,
+    );
+
+    // The limit is stated even on a healthy scan: Permit2 spenders are probed
+    // from a list, never discovered, so a clean result cannot imply the whole
+    // channel was searched.
+    check(
+      "the review always states that Permit2 spenders are checked from a list, not discovered",
+      clean.notIncluded.some((boundary) =>
+        boundary.area.includes("Permit2"),
+      ),
+      clean.notIncluded.map((b) => b.area).join(", "),
+    );
+  }
+
+  // The visible approvals list must obey the same attention rule as the review:
+  // an exposure that could not be determined outranks any amount that could.
+  {
+    const pricedToken = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+
+    const unpricedToken = "0xB0b86991c6218b36c1d19d4a2E9eb0Ce3606Eb49" as Address;
+
+    const asset = (
+      contractAddress: Address,
+      symbol: string,
+      priceUsd: number | null,
+    ) => ({
+      type: "erc20" as const,
+      symbol,
+      name: symbol,
+      balance: "1000",
+      decimals: 6,
+      decimalsKnown: true,
+      priceUsd,
+      valueUsd: priceUsd === null ? null : 1000 * priceUsd,
+      logo: null,
+      contractAddress,
+    });
+
+    const sorted = await getApprovals(
+      generated.address,
+      [asset(pricedToken, "USDC", 1), asset(unpricedToken, "MYST", null)],
+      "eth-mainnet",
+      {
+        async multicall({
+          contracts,
+        }: {
+          contracts: { address: string; args: readonly unknown[] }[];
+        }) {
+          return contracts.map((call) => {
+            if (
+              call.address.toLowerCase() ===
+              "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase()
+            ) {
+              return { status: "success" as const, result: [0n, 0, 0] as const };
+            }
+
+            // A modest, knowable allowance on both tokens: same severity, so
+            // only the unknown-vs-known exposure rule can order them.
+            return { status: "success" as const, result: 100_000_000n };
+          });
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+      { coverage: "complete" },
+    );
+
+    const sameRisk =
+      new Set(sorted.approvals.map((row) => row.risk)).size === 1;
+
+    const lastUnknown = sorted.approvals.reduce(
+      (last, row, index) => (row.exposureUsd === null ? index : last),
+      -1,
+    );
+
+    const firstKnown = sorted.approvals.findIndex(
+      (row) => row.exposureUsd !== null,
+    );
+
+    check(
+      "in the permission list an undeterminable exposure is never sorted below a known amount",
+      sameRisk &&
+        lastUnknown >= 0 &&
+        firstKnown >= 0 &&
+        lastUnknown < firstKnown,
+      `unknown rows end at ${lastUnknown}, known rows start at ${firstKnown}, same risk: ${sameRisk}`,
+    );
+
+    // A discovered token the wallet does not hold has no metadata, so its
+    // decimals are a placeholder. The row must admit that instead of printing
+    // an amount that would be wrong by orders of magnitude.
+    const strangeToken = "0xC0b86991c6218b36c1d19d4A2e9Eb0cE3606Eb50" as Address;
+
+    const discoveredMeta = await getApprovals(
+      generated.address,
+      [asset(pricedToken, "USDC", 1)],
+      "eth-mainnet",
+      {
+        async multicall({
+          contracts,
+        }: {
+          contracts: { address: string; args: readonly unknown[] }[];
+        }) {
+          return contracts.map((call) => {
+            if (
+              call.address.toLowerCase() ===
+              "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase()
+            ) {
+              return { status: "success" as const, result: [0n, 0, 0] as const };
+            }
+
+            return { status: "success" as const, result: 1_000_000n };
+          });
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+      {
+        discovered: [
+          { token: strangeToken, spender: ROUTER as Address, tokenMeta: null },
+        ],
+      },
+    );
+
+    const strangeRow = discoveredMeta.approvals.find(
+      (row) => row.token.toLowerCase() === strangeToken.toLowerCase(),
+    );
+
+    const heldRow = discoveredMeta.approvals.find(
+      (row) => row.token.toLowerCase() === pricedToken.toLowerCase(),
+    );
+
+    check(
+      "a token with no metadata is never given invented decimals to print an amount from",
+      strangeRow?.decimalsCertain === false && heldRow?.decimalsCertain === true,
+      `unknown token: ${strangeRow?.decimalsCertain}, held token: ${heldRow?.decimalsCertain}`,
+    );
+
+    // The portfolio itself falls back to 18 when a token does not report its
+    // decimals. That uncertainty must survive into the permission row rather
+    // than being upgraded to a fact just because the wallet holds the token.
+    const heldButUndescribed = await getApprovals(
+      generated.address,
+      [{ ...asset(pricedToken, "USDC", 1), decimalsKnown: false }],
+      "eth-mainnet",
+      {
+        async multicall({
+          contracts,
+        }: {
+          contracts: { address: string; args: readonly unknown[] }[];
+        }) {
+          return contracts.map((call) =>
+            call.address.toLowerCase() ===
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3".toLowerCase()
+              ? { status: "success" as const, result: [0n, 0, 0] as const }
+              : { status: "success" as const, result: 1_000_000n },
+          );
+        },
+      } as unknown as Parameters<typeof getApprovals>[3],
+    );
+
+    check(
+      "a held token whose decimals the portfolio had to guess does not print its allowance as fact",
+      heldButUndescribed.approvals.length > 0 &&
+        heldButUndescribed.approvals.every((row) => !row.decimalsCertain),
+      `${heldButUndescribed.approvals.length} rows, all uncertain: ${heldButUndescribed.approvals.every((row) => !row.decimalsCertain)}`,
+    );
+  }
+
+  // ---- Watchlist v1: identity, persistence, limits, honesty ----------------
+  {
+    const A = "0xAAaAaAAAaaAAAAaAaaaAaAaAaAaaAaaAAaaaAAa1" as Address;
+
+    const B = "0xBbBBbbBBbBBBbbBbbbbBbBbBBbBbbbBBBBbBbBB2" as Address;
+
+    const idA = { chainId: 1, address: A };
+
+    const idB = { chainId: 1, address: B };
+
+    check(
+      "identity is chain plus address, compared case-insensitively",
+      sameWatchedAsset(idA, { chainId: 1, address: A.toLowerCase() as Address }) &&
+        !sameWatchedAsset(idA, idB) &&
+        // The same address on another chain is a different token.
+        !sameWatchedAsset(idA, { chainId: 137, address: A }) &&
+        watchKey(idA) === `1:${A.toLowerCase()}`,
+      watchKey(idA),
+    );
+
+    const oneNibbleOff = (A.slice(0, -1) + "2") as Address;
+
+    check(
+      "a route carries the whole identity: the same address on another chain is a different route",
+      (() => {
+        const here = assetRouteParams({ chainId: 1, address: A });
+
+        const elsewhere = assetRouteParams({ chainId: 137, address: A });
+
+        const keyOf = (params: { id: string; chainId: string }) =>
+          assetRouteKey({ chainId: Number(params.chainId), id: params.id });
+
+        return (
+          here.id === A &&
+          here.chainId === "1" &&
+          keyOf(here) !== keyOf(elsewhere) &&
+          // Casing is display, not identity, on the boundary too.
+          keyOf(here) ===
+            keyOf(assetRouteParams({ chainId: 1, address: A.toLowerCase() })) &&
+          // A missing or hostile chainId falls back instead of becoming NaN or
+          // a silently wrong identity. Router params can also arrive as arrays.
+          parseRouteChainId(undefined, 11155111) === 11155111 &&
+          parseRouteChainId("not-a-number", 11155111) === 11155111 &&
+          parseRouteChainId("-5", 11155111) === 11155111 &&
+          parseRouteChainId("0", 11155111) === 11155111 &&
+          parseRouteChainId("1.5", 11155111) === 11155111 &&
+          parseRouteChainId("", 11155111) === 11155111 &&
+          parseRouteChainId(["137"], 11155111) === 137 &&
+          parseRouteChainId([], 11155111) === 11155111 &&
+          parseRouteChainId("137", 11155111) === 137
+        );
+      })(),
+      "route identity is (chainId, address)",
+    );
+
+    check(
+      "an entry saved for another network is never enriched with this network's data",
+      canEnrichOnNetwork({ chainId: 11155111, address: A }, 11155111) &&
+        !canEnrichOnNetwork({ chainId: 1, address: A }, 11155111),
+      "one network's verdict never lands on another network's token",
+    );
+
+    check(
+      "an address that differs by a single nibble is a different token",
+      !sameWatchedAsset(idA, { chainId: 1, address: oneNibbleOff }),
+      `${A} vs ${oneNibbleOff}`,
+    );
+
+    const added = addWatched([], idA, 1000);
+
+    const addedTwice = added.ok ? addWatched(added.items, idA, 2000) : null;
+
+    check(
+      "adding the same token twice keeps exactly one entry and reports success",
+      added.ok &&
+        added.items.length === 1 &&
+        addedTwice?.ok === true &&
+        addedTwice.items.length === 1 &&
+        addedTwice.alreadyWatched === true,
+      `after two adds: ${addedTwice?.ok ? addedTwice.items.length : "error"}`,
+    );
+
+    check(
+      "removing a token that was never watched changes nothing",
+      removeWatched(added.ok ? added.items : [], idB).length === 1 &&
+        removeWatched(added.ok ? added.items : [], idA).length === 0,
+      "remove is idempotent",
+    );
+
+    // Two contracts sharing a symbol is exactly how impersonation works, so they
+    // must be independently watchable.
+    const twinSymbols = addWatched(
+      added.ok ? added.items : [],
+      idB,
+      1500,
+    );
+
+    check(
+      "two different contracts with the same symbol are watched independently",
+      twinSymbols.ok && twinSymbols.items.length === 2,
+      `${twinSymbols.ok ? twinSymbols.items.length : 0} entries`,
+    );
+
+    const crossChain = addWatched(
+      added.ok ? added.items : [],
+      { chainId: 137, address: A },
+      1600,
+    );
+
+    check(
+      "the same address on another chain is watched independently",
+      crossChain.ok && crossChain.items.length === 2,
+      `${crossChain.ok ? crossChain.items.length : 0} entries`,
+    );
+
+    let full: WatchedToken[] = [];
+
+    for (let i = 0; i < MAX_WATCHLIST_ITEMS; i += 1) {
+      const address = `0x${(i + 1)
+        .toString(16)
+        .padStart(40, "0")}` as Address;
+
+      const result = addWatched(full, { chainId: 1, address }, 1000 + i);
+
+      if (result.ok) {
+        full = result.items;
+      }
+    }
+
+    const overflow = addWatched(full, idA, 9999);
+
+    check(
+      "the cap refuses the addition instead of silently evicting the oldest",
+      full.length === MAX_WATCHLIST_ITEMS &&
+        !overflow.ok &&
+        overflow.reason === "limit-reached" &&
+        isWatched(full, {
+          chainId: 1,
+          address: `0x${(1).toString(16).padStart(40, "0")}` as Address,
+        }),
+      `at cap ${full.length}, oldest still present`,
+    );
+
+    const roundTrip = parseWatchlist(
+      serializeWatchlist([
+        { chainId: 1, address: A, addedAt: 10 },
+        { chainId: 137, address: B, addedAt: 20 },
+      ]),
+    );
+
+    check(
+      "a saved watchlist survives a restart intact",
+      roundTrip.status === "ready" &&
+        roundTrip.items.length === 2 &&
+        roundTrip.repaired === false,
+      `${roundTrip.status === "ready" ? roundTrip.items.length : "unreadable"} items`,
+    );
+
+    const corrupt = parseWatchlist("{ not json");
+
+    const futureVersion = parseWatchlist(
+      JSON.stringify({ version: 99, items: [] }),
+    );
+
+    check(
+      "corrupt or future storage is reported as unreadable, never as an empty watchlist",
+      corrupt.status === "unreadable" && futureVersion.status === "unreadable",
+      `corrupt: ${corrupt.status}, future: ${futureVersion.status}`,
+    );
+
+    const messy = parseWatchlist(
+      JSON.stringify({
+        version: 1,
+        items: [
+          { chainId: 1, address: A, addedAt: 1 },
+          { chainId: 1, address: A.toLowerCase(), addedAt: 2 },
+          { chainId: 1, address: "not-an-address", addedAt: 3 },
+          { chainId: 0, address: B, addedAt: 4 },
+          null,
+        ],
+      }),
+    );
+
+    check(
+      "duplicates and malformed entries are repaired deterministically and flagged",
+      messy.status === "ready" &&
+        messy.items.length === 1 &&
+        messy.repaired === true,
+      `${messy.status === "ready" ? messy.items.length : "unreadable"} kept, repaired ${
+        messy.status === "ready" ? messy.repaired : "n/a"
+      }`,
+    );
+
+    check(
+      "an empty store is a readable empty watchlist, not an error",
+      parseWatchlist(null).status === "ready",
+      "nothing saved yet is not a failure",
+    );
+
+    // §30, the remaining corrupt shapes, pinned so the contract cannot drift.
+    const notAnArray = parseWatchlist(
+      JSON.stringify({ version: 1, items: "nope" }),
+    );
+
+    const overCap = parseWatchlist(
+      JSON.stringify({
+        version: 1,
+        items: Array.from({ length: 60 }, (_, index) => ({
+          chainId: 1,
+          address: `0x${(index + 1).toString(16).padStart(40, "0")}`,
+          addedAt: index,
+        })),
+      }),
+    );
+
+    const brokenTimestamp = parseWatchlist(
+      JSON.stringify({
+        version: 1,
+        items: [{ chainId: 1, address: A, addedAt: "yesterday" }],
+      }),
+    );
+
+    check(
+      "the remaining corrupt shapes each have a fixed, reported outcome",
+      notAnArray.status === "unreadable" &&
+        overCap.status === "ready" &&
+        overCap.items.length === MAX_WATCHLIST_ITEMS &&
+        overCap.repaired === true &&
+        // The newest survive the trim, deterministically.
+        overCap.items[0].addedAt === 59 &&
+        brokenTimestamp.status === "ready" &&
+        brokenTimestamp.repaired === true,
+      `not-array: ${notAnArray.status}, over-cap kept ${
+        overCap.status === "ready" ? overCap.items.length : "n/a"
+      }, bad timestamp repaired: ${
+        brokenTimestamp.status === "ready" ? brokenTimestamp.repaired : "n/a"
+      }`,
+    );
+
+    check(
+      "the storage key does not depend on the selected wallet account",
+      WATCHLIST_STORAGE_KEY === "watchlist.v1" &&
+        !WATCHLIST_STORAGE_KEY.includes("0x"),
+      WATCHLIST_STORAGE_KEY,
+    );
+
+    check(
+      "the default order is most recently added first, deterministically",
+      (() => {
+        const sorted = sortWatchlist([
+          { chainId: 1, address: A, addedAt: 10 },
+          { chainId: 1, address: B, addedAt: 30 },
+          { chainId: 137, address: A, addedAt: 20 },
+        ]);
+
+        return (
+          sorted[0].addedAt === 30 &&
+          sorted[1].addedAt === 20 &&
+          sorted[2].addedAt === 10
+        );
+      })(),
+      "newest first",
+    );
+
+    check(
+      "search finds a token by address even when its metadata never arrived",
+      (() => {
+        const items: WatchedToken[] = [
+          { chainId: 1, address: A, addedAt: 1 },
+          { chainId: 1, address: B, addedAt: 2 },
+        ];
+
+        const describe = (id: { address: Address }) =>
+          id.address.toLowerCase() === B.toLowerCase()
+            ? { symbol: "PEPE", name: "Pepe" }
+            : {};
+
+        const byAddress = searchWatchlist(items, A.slice(2, 10), describe);
+
+        const bySymbol = searchWatchlist(items, "pep", describe);
+
+        const noQuery = searchWatchlist(items, "   ", describe);
+
+        return (
+          byAddress.length === 1 &&
+          byAddress[0].address.toLowerCase() === A.toLowerCase() &&
+          bySymbol.length === 1 &&
+          noQuery.length === 2
+        );
+      })(),
+      "address search works without metadata",
+    );
+
+    // Bounded refresh: fifty watched tokens must not become fifty fan-outs.
+    check(
+      "the refresh queue never runs more than its limit at once and survives failures",
+      await (async () => {
+        const order: number[] = [];
+
+        let inFlight = 0;
+
+        let peak = 0;
+
+        const settled: unknown[] = [];
+
+        await runBounded({
+          items: Array.from({ length: 20 }, (_, index) => index),
+
+          limit: 4,
+
+          worker: async (item) => {
+            inFlight += 1;
+
+            peak = Math.max(peak, inFlight);
+
+            await new Promise((resolve) => setTimeout(resolve, 1));
+
+            order.push(item);
+
+            inFlight -= 1;
+
+            if (item % 5 === 0) {
+              throw new Error("provider down");
+            }
+          },
+
+          onSettled: (_item, _index, error) => {
+            settled.push(error);
+          },
+        });
+
+        return (
+          peak <= 4 &&
+          order.length === 20 &&
+          settled.length === 20 &&
+          settled.filter((error) => error !== null).length === 4
+        );
+      })(),
+      "bounded concurrency, queue continues past failures",
+    );
+
+    check(
+      "a nonsensical concurrency limit still refreshes every item instead of silently doing nothing",
+      await (async () => {
+        const done: number[] = [];
+
+        await runBounded({
+          items: [1, 2, 3],
+
+          limit: Number.NaN,
+
+          worker: async (item) => {
+            done.push(item);
+          },
+        });
+
+        return done.length === 3;
+      })(),
+      "a broken limit must not resolve as a successful no-op",
+    );
+
+    // ---- store: serialized mutations, no lost update ----------------------
+    const slowStorage = (initial: string | null = null) => {
+      let value = initial;
+
+      const delay = () => new Promise((resolve) => setTimeout(resolve, 2));
+
+      return {
+        store: {
+          async get() {
+            await delay();
+
+            return value;
+          },
+
+          async set(_key: string, next: string) {
+            await delay();
+
+            value = next;
+          },
+
+          async remove() {
+            value = null;
+          },
+        },
+
+        read: () => value,
+      };
+    };
+
+    const racy = slowStorage();
+
+    const store = createWatchlistStore({ storage: racy.store });
+
+    await Promise.all([store.add(idA, 1), store.add(idB, 2)]);
+
+    const afterRace = await store.load();
+
+    check(
+      "two tokens watched at the same moment both survive — no lost update",
+      afterRace.status === "ready" &&
+        afterRace.items.length === 2 &&
+        isWatched(afterRace.items, idA) &&
+        isWatched(afterRace.items, idB),
+      `${afterRace.status === "ready" ? afterRace.items.length : "unreadable"} items after concurrent adds`,
+    );
+
+    await Promise.all([store.remove(idA), store.add({ chainId: 1, address: oneNibbleOff }, 3)]);
+
+    const afterMixed = await store.load();
+
+    check(
+      "a remove racing an add loses neither operation",
+      afterMixed.status === "ready" &&
+        !isWatched(afterMixed.items, idA) &&
+        isWatched(afterMixed.items, idB) &&
+        isWatched(afterMixed.items, { chainId: 1, address: oneNibbleOff }),
+      `${afterMixed.status === "ready" ? afterMixed.items.map((i) => i.address).join(",") : "unreadable"}`,
+    );
+
+    const corruptStore = createWatchlistStore({
+      storage: slowStorage("{ broken").store,
+    });
+
+    const refusedAdd = await corruptStore.add(idA, 1);
+
+    check(
+      "an unreadable store is never overwritten by a new addition",
+      !refusedAdd.ok && refusedAdd.reason === "unreadable",
+      refusedAdd.ok ? "overwrote it" : refusedAdd.reason,
+    );
+
+    check(
+      "an unreadable store answers 'we do not know', not a confident 'not watching'",
+      (await corruptStore.isWatched(idA)) === "unreadable" &&
+        (await store.isWatched(idB)) === "watching" &&
+        (await store.isWatched({ chainId: 999, address: A })) ===
+          "not-watching",
+      "three answers, not two",
+    );
+
+    const invalidAdd = await store.add(
+      { chainId: 0, address: A },
+      1,
+    );
+
+    const invalidAddress = await store.add(
+      { chainId: 1, address: "0xnope" as Address },
+      1,
+    );
+
+    check(
+      "the writer refuses exactly what the reader would discard, so nothing vanishes on restart",
+      !invalidAdd.ok &&
+        invalidAdd.reason === "invalid-asset" &&
+        !invalidAddress.ok &&
+        invalidAddress.reason === "invalid-asset",
+      `${invalidAdd.ok ? "accepted" : invalidAdd.reason} / ${invalidAddress.ok ? "accepted" : invalidAddress.reason}`,
+    );
+
+    const failingWrite = createWatchlistStore({
+      storage: {
+        async get() {
+          return null;
+        },
+
+        async set() {
+          throw new Error("disk full");
+        },
+
+        async remove() {},
+      },
+    });
+
+    const writeFailed = await failingWrite.add(idA, 1);
+
+    check(
+      "a failed write is reported instead of pretending the token was saved",
+      !writeFailed.ok && writeFailed.reason === "write-failed",
+      writeFailed.ok ? "claimed success" : writeFailed.reason,
+    );
+
+    // ---- observations: unknown is never low, stale is never current -------
+    const intel = (over: Record<string, unknown>) =>
+      ({
+        token: { chainId: 1, address: A },
+        summary: {
+          kind: "no-major-issues",
+          title: "No major issues detected",
+          detectedRiskCount: 0,
+        },
+        liquidity: { totalLiquidityUsd: { value: 4_200_000 } },
+        availability: { overall: "available" },
+        freshness: {
+          trade: "fresh",
+          contract: "fresh",
+          holders: "fresh",
+          liquidity: "fresh",
+        },
+        observedAt: 1000,
+        ...over,
+      }) as unknown as Parameters<typeof buildWatchRowObservation>[0]["intelligence"];
+
+    const fresh = buildWatchRowObservation({
+      intelligence: intel({}),
+      refreshing: false,
+    });
+
+    const unavailable = buildWatchRowObservation({
+      intelligence: intel({
+        availability: { overall: "unavailable" },
+        summary: {
+          kind: "incomplete",
+          title: "Incomplete data",
+          detectedRiskCount: 0,
+        },
+      }),
+      refreshing: false,
+    });
+
+    const unsupported = buildWatchRowObservation({
+      intelligence: intel({ availability: { overall: "unsupported" } }),
+      refreshing: false,
+    });
+
+    const partial = buildWatchRowObservation({
+      intelligence: intel({ availability: { overall: "partial" } }),
+      refreshing: false,
+    });
+
+    check(
+      "a provider failure reads as unavailable or partial, never as a clean low-risk result",
+      fresh.status === "current" &&
+        unavailable.status === "unavailable" &&
+        unsupported.status === "unsupported" &&
+        partial.status === "partial" &&
+        unavailable.riskKind !== "no-major-issues",
+      `${fresh.status} / ${unavailable.status} / ${unsupported.status} / ${partial.status}`,
+    );
+
+    const staleRow = buildWatchRowObservation({
+      intelligence: intel({
+        freshness: {
+          trade: "stale",
+          contract: "fresh",
+          holders: "fresh",
+          liquidity: "fresh",
+        },
+      }),
+      refreshing: false,
+    });
+
+    const refreshingRow = buildWatchRowObservation({
+      intelligence: intel({}),
+      refreshing: true,
+    });
+
+    const firstEverLoad = buildWatchRowObservation({
+      intelligence: null,
+      refreshing: true,
+    });
+
+    const unknownFreshness = buildWatchRowObservation({
+      intelligence: intel({
+        freshness: {
+          trade: "unknown",
+          contract: "unknown",
+          holders: "unknown",
+          liquidity: "unknown",
+        },
+      }),
+      refreshing: false,
+    });
+
+    check(
+      "an observation whose age is unknown is not presented as current",
+      unknownFreshness.status !== "current",
+      `status ${unknownFreshness.status}`,
+    );
+
+    check(
+      "stale data is never shown as current, and a refresh over existing data is distinct from a first load",
+      staleRow.status === "stale" &&
+        refreshingRow.status === "refreshing" &&
+        firstEverLoad.status === "checking" &&
+        buildWatchRowObservation({ intelligence: null, refreshing: false })
+          .status === "idle",
+      `${staleRow.status} / ${refreshingRow.status} / ${firstEverLoad.status}`,
+    );
+
+    const noLiquidity = buildWatchRowObservation({
+      intelligence: intel({
+        liquidity: { totalLiquidityUsd: { value: "unknown" } },
+      }),
+      refreshing: false,
+    });
+
+    check(
+      "unknown liquidity is reported as unknown, never as zero dollars",
+      noLiquidity.liquidityUsd.known === false &&
+        fresh.liquidityUsd.known === true &&
+        fresh.liquidityUsd.value === 4_200_000,
+      `unknown: ${noLiquidity.liquidityUsd.known}, known: ${fresh.liquidityUsd.known}`,
+    );
+
+    check(
+      "the risk wording comes verbatim from the shared summary, not from a watchlist-only score",
+      fresh.riskTitle === "No major issues detected" &&
+        fresh.riskKind === "no-major-issues",
+      `${fresh.riskKind}: ${fresh.riskTitle}`,
+    );
+
+    const noPrice = buildWatchRowObservation({
+      intelligence: intel({}),
+      refreshing: false,
+    });
+
+    const withPrice = buildWatchRowObservation({
+      intelligence: intel({}),
+      refreshing: false,
+      priceUsd: 0.00124,
+    });
+
+    check(
+      "a token with no price is reported as unpriced, never as worth zero dollars",
+      noPrice.priceUsd.known === false &&
+        withPrice.priceUsd.known === true &&
+        withPrice.priceUsd.value === 0.00124,
+      `no price: ${noPrice.priceUsd.known}, priced: ${withPrice.priceUsd.known}`,
+    );
+
+    // Enrichment is display data. Losing it must never evict the token: the
+    // membership list and the observations are separate facts.
+    const survivingStore = createWatchlistStore({
+      storage: slowStorage(serializeWatchlist([{ ...idA, addedAt: 1 }])).store,
+    });
+
+    const before = await survivingStore.load();
+
+    await runBounded({
+      items: before.status === "ready" ? before.items : [],
+
+      worker: async () => {
+        throw new Error("metadata and providers are down");
+      },
+    });
+
+    const after = await survivingStore.load();
+
+    check(
+      "a token whose metadata and risk lookups both fail stays on the watchlist",
+      after.status === "ready" &&
+        after.items.length === 1 &&
+        isWatched(after.items, idA),
+      `${after.status === "ready" ? after.items.length : "unreadable"} items after a total enrichment failure`,
     );
   }
 

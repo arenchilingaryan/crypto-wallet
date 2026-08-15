@@ -4,6 +4,10 @@ import { useRouter } from "expo-router";
 
 import { ExploreView } from "@/components/screens/explore-view";
 
+import { ACTIVE_NETWORK } from "@/constants/networks";
+
+import { assetRouteParams } from "@/core/navigation/assetRoute";
+
 import {
   getMarkets,
   type MarketList,
@@ -83,12 +87,18 @@ export default function ExploreScreen() {
           },
         });
       }}
+      onOpenWatchlist={() => {
+        router.push("/watchlist");
+      }}
       onSelect={(market) => {
         router.push({
           pathname: "/asset/[id]",
 
           params: {
-            id: market.address,
+            ...assetRouteParams({
+              chainId: ACTIVE_NETWORK.chain.id,
+              address: market.address,
+            }),
             origin: "explore",
           },
         });

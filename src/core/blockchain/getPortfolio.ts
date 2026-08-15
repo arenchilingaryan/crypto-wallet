@@ -17,6 +17,11 @@ export type PortfolioAsset = {
 
   decimals: number;
 
+  // False when `decimals` is a fallback rather than something the token told
+  // us. Any human-readable amount derived from a guessed scale is meaningless,
+  // so consumers must not print one as fact.
+  decimalsKnown: boolean;
+
   priceUsd: number | null;
 
   valueUsd: number | null;
@@ -226,6 +231,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
 
     decimals: 18,
 
+    decimalsKnown: true,
+
     priceUsd: nativePrice,
 
     valueUsd: nativeValueUsd,
@@ -264,6 +271,8 @@ export async function getPortfolio(address: Address): Promise<Portfolio> {
         balance,
 
         decimals: resolvedDecimals,
+
+        decimalsKnown,
 
         priceUsd,
 

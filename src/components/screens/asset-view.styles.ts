@@ -81,6 +81,23 @@ export const styles = StyleSheet.create({
     gap: 2,
   },
 
+  watchButton: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.full,
+  },
+
+  watchButtonPressed: {
+    backgroundColor: Colors.surfaceAlt,
+  },
+
+  watchError: {
+    marginTop: Spacing.sm,
+  },
+
   details: {
     marginTop: Spacing.xxl,
     padding: Spacing.lg,

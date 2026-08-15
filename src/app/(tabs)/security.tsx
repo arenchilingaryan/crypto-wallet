@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Alert } from "react-native";
 
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 import type { Hash } from "viem";
 
@@ -30,6 +30,7 @@ import {
   describeRemaining,
   FREEZE_DURATION_MS,
 } from "@/core/security/panicFreeze";
+import { buildSecurityReview } from "@/core/security/securityReviewSummary";
 
 import { panicApi } from "@/platform/react-native/panicApi";
 
@@ -39,6 +40,8 @@ import { transactionApi } from "@/platform/react-native/transactionApi";
 import { walletApi } from "@/platform/react-native/walletApi";
 
 export default function SecurityScreen() {
+  const router = useRouter();
+
   const [scan, setScan] = useState<ApprovalScan | null>(null);
 
   const [loading, setLoading] = useState(true);
@@ -145,6 +148,11 @@ export default function SecurityScreen() {
           console.error("Approval scan failed:", scanError);
 
           if (active) {
+            // Drop the previous result: a stale review would otherwise keep
+            // asserting "No issues found" next to the failure that just
+            // invalidated it.
+            setScan(null);
+
             setError("Failed to read approvals");
           }
         } finally {
@@ -382,6 +390,7 @@ export default function SecurityScreen() {
   return (
     <SecurityView
       scan={scan}
+      review={scan ? buildSecurityReview(scan) : null}
       loading={loading}
       error={error}
       freeze={freeze}
@@ -395,6 +404,9 @@ export default function SecurityScreen() {
       }}
       onRevoke={(approval) => {
         void handleRevoke(approval);
+      }}
+      onOpenSetup={() => {
+        router.push("/settings");
       }}
     />
   );

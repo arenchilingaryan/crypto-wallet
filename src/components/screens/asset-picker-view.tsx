@@ -25,6 +25,14 @@ type AssetPickerViewProps = {
 
   error: string | null;
 
+  // Membership is a local fact, independent of any provider refresh, so the
+  // marker shows even when risk data is unavailable.
+  isWatched?: (asset: AssetSearchResult) => boolean;
+
+  // True when the watchlist could not be read at all. Without this the absence
+  // of a star would quietly assert "not watching" for every row.
+  watchUnavailable?: boolean;
+
   onChangeQuery: (value: string) => void;
 
   onSelect: (asset: AssetSearchResult) => void;
@@ -38,6 +46,8 @@ export function AssetPickerView({
   results,
   loading,
   error,
+  isWatched,
+  watchUnavailable = false,
   onChangeQuery,
   onSelect,
   onBack,
@@ -92,6 +102,13 @@ export function AssetPickerView({
         </AppText>
       )}
 
+      {watchUnavailable && (
+        <AppText variant="caption" tone="warning">
+          Watchlist status unavailable — these results do not show whether you
+          are watching them.
+        </AppText>
+      )}
+
       {!loading && !error && query.trim().length > 0 && results.length === 0 && (
         <View style={styles.empty}>
           <AppText variant="bodyStrong">No assets found</AppText>
@@ -127,6 +144,13 @@ export function AssetPickerView({
                 <View style={styles.assetText}>
                   <View style={styles.assetTitle}>
                     <AppText variant="bodyStrong">{asset.symbol}</AppText>
+
+                    {!watchUnavailable && isWatched?.(asset) && (
+                      // Paired with a word, never a lone coloured glyph.
+                      <AppText variant="caption" tone="accent">
+                        ★ Watching
+                      </AppText>
+                    )}
 
                     {asset.source === "wallet" && (
                       <AppText variant="caption" tone="muted">

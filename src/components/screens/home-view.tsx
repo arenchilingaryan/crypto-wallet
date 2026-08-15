@@ -8,6 +8,10 @@ import * as Clipboard from "expo-clipboard";
 
 import type { Address } from "viem";
 
+import { ACTIVE_NETWORK } from "@/constants/networks";
+
+import { assetRouteParams } from "@/core/navigation/assetRoute";
+
 import { AddressPill } from "@/components/address-pill";
 import { AssetRow } from "@/components/asset-row";
 
@@ -253,9 +257,10 @@ export function HomeView({
                         router.push({
                           pathname: "/asset/[id]",
 
-                          params: {
-                            id: assetId,
-                          },
+                          params: assetRouteParams({
+                            chainId: ACTIVE_NETWORK.chain.id,
+                            address: assetId,
+                          }),
                         });
                       }
                     : undefined

@@ -12,8 +12,13 @@ import type {
 } from "@/core/blockchain/getAssetMarketData";
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
 import type { TokenIntelligence } from "@/core/token-intelligence/types";
+import type { WatchStatus } from "@/core/watchlist/watchlistStore";
 
-import { formatTokenAmount, formatUsd } from "@/utils/format";
+import {
+  formatBalanceAmount,
+  formatTokenAmount,
+  formatUsd,
+} from "@/utils/format";
 
 import { PriceChart } from "../ui/price-chart";
 import { styles } from "./asset-view.styles";
@@ -24,6 +29,19 @@ type AssetViewProps = {
   range: MarketRange;
   marketPending: boolean;
   intelligence: TokenIntelligence | null;
+
+  // Absent for assets that cannot be watched (the native coin has no contract
+  // address, and identity here is chain + address).
+  watch: {
+    status: WatchStatus;
+
+    pending: boolean;
+
+    error: string | null;
+
+    onToggle: () => void;
+  } | null;
+
   onChangeRange: (range: MarketRange) => void;
   onRetryIntelligence: () => void;
   onReceive: () => void;
@@ -37,6 +55,7 @@ export function AssetView({
   range,
   marketPending,
   intelligence,
+  watch,
   onChangeRange,
   onRetryIntelligence,
   onReceive,
@@ -80,7 +99,57 @@ export function AssetView({
             {asset.name}
           </AppText>
         </View>
+
+        {watch && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{
+              selected: watch.status === "watching",
+              busy: watch.pending,
+              disabled: watch.status === "unreadable",
+            }}
+            accessibilityLabel={
+              watch.status === "unreadable"
+                ? "Watchlist status unavailable"
+                : watch.status === "watching"
+                  ? "Remove token from watchlist"
+                  : "Add token to watchlist"
+            }
+            disabled={watch.pending || watch.status === "unreadable"}
+            onPress={watch.onToggle}
+            style={({ pressed }) => [
+              styles.watchButton,
+              pressed && styles.watchButtonPressed,
+            ]}
+          >
+            {/* The star is never the only signal: the label carries the state
+                for anyone who cannot rely on colour or shape — including the
+                case where we could not read the list at all. */}
+            <AppText
+              variant="label"
+              tone={
+                watch.status === "watching"
+                  ? "accent"
+                  : watch.status === "unreadable"
+                    ? "warning"
+                    : "muted"
+              }
+            >
+              {watch.status === "watching"
+                ? "★ Watching"
+                : watch.status === "unreadable"
+                  ? "Watch status unavailable"
+                  : "☆ Watch"}
+            </AppText>
+          </Pressable>
+        )}
       </View>
+
+      {watch?.error && (
+        <AppText variant="caption" tone="danger" style={styles.watchError}>
+          {watch.error}
+        </AppText>
+      )}
 
       {currentPriceUsd !== null ? (
         <PriceChart
@@ -138,8 +207,14 @@ export function AssetView({
             Balance
           </AppText>
 
-          <AppText variant="bodyStrong" tabular>
-            {formatTokenAmount(asset.balance)} {asset.symbol}
+          <AppText
+            variant="bodyStrong"
+            tone={asset.decimalsKnown ? "primary" : "warning"}
+            tabular
+          >
+            {asset.decimalsKnown
+              ? `${formatTokenAmount(asset.balance)} ${asset.symbol}`
+              : formatBalanceAmount(asset.balance, false)}
           </AppText>
         </View>
 

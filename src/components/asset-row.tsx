@@ -1,7 +1,7 @@
 import { Pressable, View } from "react-native";
 
 import type { PortfolioAsset } from "@/core/blockchain/getPortfolio";
-import { formatTokenAmount, formatUsd } from "@/utils/format";
+import { formatBalanceAmount, formatUsd } from "@/utils/format";
 
 import { AssetIcon } from "./asset-icon";
 import { styles } from "./asset-row.styles";
@@ -41,8 +41,12 @@ export function AssetRow({
       </View>
 
       <View style={styles.amounts}>
-        <AppText variant="bodyStrong" tabular>
-          {formatTokenAmount(asset.balance)}
+        <AppText
+          variant="bodyStrong"
+          tone={asset.decimalsKnown ? "primary" : "warning"}
+          tabular
+        >
+          {formatBalanceAmount(asset.balance, asset.decimalsKnown)}
         </AppText>
 
         <View style={styles.valueRow}>

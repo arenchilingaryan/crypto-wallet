@@ -27,6 +27,17 @@ export function formatTokenAmount(balance: string): string {
   return Number(value.toPrecision(5)).toString();
 }
 
+// A balance is only meaningful if the scale it was divided by is real. When a
+// token never reported its decimals the portfolio falls back to 18, which makes
+// the printed figure wrong by orders of magnitude for, say, a 6-decimal token —
+// so say the amount is unknown rather than show a confident wrong number.
+export function formatBalanceAmount(
+  balance: string,
+  decimalsKnown: boolean,
+): string {
+  return decimalsKnown ? formatTokenAmount(balance) : "Amount unknown";
+}
+
 export function shortenAddress(address: string): string {
   return truncateAddress(address);
 }

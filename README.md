@@ -20,6 +20,9 @@ Most wallets show you what you are signing. This one is built to tell you what y
 - Swap tokens through Uniswap
 - Track wallet activity and transaction status
 - Reveal the recovery phrase and the private key of the active wallet, behind a second PIN prompt
+- **Local token watchlist** — follow tokens without holding them; the list is stored on the device, keyed by chain and contract address, and is not tied to the selected account
+- Risk and liquidity context for watched tokens from the same Token Intelligence checks used on the token screen
+- Explicit freshness, partial and unavailable states — an unread check is never shown as a clean result, and a missing price or liquidity figure is never shown as zero
 
 ### Security
 
@@ -57,3 +60,5 @@ This is a software wallet with no dedicated secure hardware, so some limits are 
 - **Emergency Lockdown buys time; it is not proof against a determined local attacker.** Moving the device clock forward, or deleting the local lockdown record on the web build, can end it early. There is no trusted monotonic clock in the browser.
 - **USD-denominated firewall limits trust the price feed.** They are fetched over TLS from a fixed provider (not the user's chosen RPC) and are disabled on test networks, but a compromised or man-in-the-middled price source could mis-value a transfer. The manipulated value is always shown on the signing briefing.
 - **The data-provider API key is bundled into the client.** On the web build it is visible to anyone; abuse is rate-limit and cost, never key theft of user funds. A backend proxy would remove it from the client.
+- **The watchlist does no background monitoring and sends no alerts.** There is no backend, no scheduled job and no push notification: watched tokens are re-checked only while the app is open, and the screen states when each result was last observed. It will not warn anyone about a token they are not looking at.
+- **Watched tokens that the wallet does not hold have no price.** Prices come from the portfolio feed, which only covers held assets, so an unheld token shows "Price unavailable" rather than a number obtained from somewhere else.

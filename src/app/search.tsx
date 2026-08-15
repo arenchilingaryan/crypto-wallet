@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useLocalSearchParams, useRouter } from "expo-router";
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+} from "expo-router";
 
 import { AssetPickerView } from "@/components/screens/asset-picker-view";
 
@@ -10,7 +14,13 @@ import { getPortfolio, type Portfolio } from "@/core/blockchain/getPortfolio";
 
 import { searchAssets } from "@/core/blockchain/searchAssets";
 
+import { ACTIVE_NETWORK } from "@/constants/networks";
+
+import { assetRouteParams } from "@/core/navigation/assetRoute";
+import { watchKey } from "@/core/watchlist/watchlist";
+
 import { walletApi } from "@/platform/react-native/walletApi";
+import { watchlistApi } from "@/platform/react-native/watchlistApi";
 
 export default function SearchScreen() {
   const router = useRouter();
@@ -27,7 +37,53 @@ export default function SearchScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // Watch membership is a local fact and is loaded on its own: Explore must
+  // still show the star even if search or the risk providers are struggling.
+  const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
+
+  const [watchUnavailable, setWatchUnavailable] = useState(false);
+
   const requestId = useRef(0);
+
+  // Re-read on focus, not just on mount: this screen stays mounted while the
+  // user opens a token and watches it, so a mount-only read would keep showing
+  // the pre-tap state — including a star on something just unwatched.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void watchlistApi
+        .load()
+        .then((snapshot) => {
+          if (!active) {
+            return;
+          }
+
+          if (snapshot.status !== "ready") {
+            // Not knowing is not "not watching". Say so once, rather than
+            // silently drawing every row without a star.
+            setWatchUnavailable(true);
+
+            return;
+          }
+
+          setWatchUnavailable(false);
+
+          setWatchedKeys(new Set(snapshot.items.map((item) => watchKey(item))));
+        })
+        .catch((watchError) => {
+          console.error("Watchlist membership lookup failed:", watchError);
+
+          if (active) {
+            setWatchUnavailable(true);
+          }
+        });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -132,6 +188,17 @@ export default function SearchScreen() {
       results={results}
       loading={loading}
       error={error}
+      watchUnavailable={watchUnavailable}
+      isWatched={(asset) =>
+        asset.contractAddress
+          ? watchedKeys.has(
+              watchKey({
+                chainId: ACTIVE_NETWORK.chain.id,
+                address: asset.contractAddress,
+              }),
+            )
+          : false
+      }
       onChangeQuery={setQuery}
       onBack={() => {
         router.back();
@@ -148,7 +215,10 @@ export default function SearchScreen() {
           pathname: "/asset/[id]",
 
           params: {
-            id: assetId,
+            ...assetRouteParams({
+              chainId: ACTIVE_NETWORK.chain.id,
+              address: assetId,
+            }),
             ...(origin === "explore" ? { origin: "explore" } : {}),
           },
         });

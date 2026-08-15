@@ -20,6 +20,10 @@ import type {
   ApprovalScan,
   TokenApproval,
 } from "@/core/blockchain/getApprovals";
+import type {
+  SecurityReviewState,
+  SecurityReviewSummary,
+} from "@/core/security/securityReviewSummary";
 
 import { formatUsd, shortenAddress } from "@/utils/format";
 
@@ -28,11 +32,15 @@ import { styles } from "./security-view.styles";
 type SecurityViewProps = {
   scan: ApprovalScan | null;
 
+  review: SecurityReviewSummary | null;
+
   loading: boolean;
 
   error: string | null;
 
   onRevoke: (approval: TokenApproval) => void;
+
+  onOpenSetup: () => void;
 
   freeze: {
     frozen: boolean;
@@ -62,6 +70,12 @@ function formatAllowance(approval: TokenApproval) {
     return "Unlimited";
   }
 
+  // Without the token's real decimals any human-readable figure is arbitrary —
+  // a 6-decimal token rendered as 18 understates the allowance a billionfold.
+  if (!approval.decimalsCertain) {
+    return "Amount unknown";
+  }
+
   const value = Number(formatUnits(approval.allowance, approval.tokenDecimals));
 
   if (!Number.isFinite(value)) {
@@ -81,8 +95,23 @@ function riskTone(risk: ApprovalRisk) {
   return risk === "medium" ? ("warning" as const) : ("muted" as const);
 }
 
+// The state carries the tone. "reviewed" and "neutral" are muted, never green —
+// the screen has no vocabulary for a positive all-clear on purpose.
+function reviewStateTone(state: SecurityReviewState) {
+  if (state === "attention") {
+    return "danger" as const;
+  }
+
+  if (state === "incomplete") {
+    return "warning" as const;
+  }
+
+  return "muted" as const;
+}
+
 export function SecurityView({
   scan,
+  review,
   loading,
   error,
   freeze,
@@ -91,20 +120,107 @@ export function SecurityView({
   onRequestUnfreeze,
   onCompleteUnfreeze,
   onRevoke,
+  onOpenSetup,
 }: SecurityViewProps) {
   const approvals = scan?.approvals ?? [];
 
   const totalExposure = scan?.totalExposureUsd ?? 0;
 
-  const riskyCount = approvals.filter(
-    (approval) => approval.risk === "critical" || approval.risk === "high",
+  // Taken straight from the review so the two can never drift apart: an unread
+  // permission is a different kind of fact and is reported separately, never
+  // added into one "risky" total.
+  const riskyCount = review?.openItems.length ?? 0;
+
+  // Only a permission whose allowance we actually read is proven to be active.
+  const activeCount = approvals.filter(
+    (approval) => approval.allowanceCertain,
   ).length;
 
   return (
     <Screen scroll>
       <AppText variant="title" tone="paper" style={styles.heading}>
-        Security
+        Security Review
       </AppText>
+
+      {review && (
+        <View style={styles.summary}>
+          <AppText variant="bodyStrong" tone={reviewStateTone(review.state)}>
+            {review.headline}
+          </AppText>
+
+          <AppText variant="caption" tone="muted">
+            Reviewing {review.scope.join(", ").toLowerCase()} ·{" "}
+            {review.reviewedPermissionCount} permission
+            {review.reviewedPermissionCount === 1 ? "" : "s"} checked
+          </AppText>
+
+          {(review.openItems.length > 0 ||
+            review.unverifiedPermissionCount > 0) && (
+            <View style={styles.reviewGroup}>
+              <AppText variant="overline" tone="muted">
+                Permissions
+              </AppText>
+
+              {/* Counted side by side, never added together: a proven problem
+                  and an unread permission are different kinds of fact. */}
+              {review.openItems.length > 0 && (
+                <AppText variant="caption" tone="danger">
+                  {review.openItems.length} active issue
+                  {review.openItems.length === 1 ? "" : "s"}
+                </AppText>
+              )}
+
+              {review.unverifiedPermissionCount > 0 && (
+                <AppText variant="caption" tone="warning">
+                  {review.unverifiedPermissionCount} could not be verified
+                </AppText>
+              )}
+            </View>
+          )}
+
+          {review.coverageGaps.length > 0 && (
+            <View style={styles.reviewGroup}>
+              <AppText variant="overline" tone="muted">
+                Coverage
+              </AppText>
+
+              {review.coverageGaps.map((gap, index) => (
+                <AppText key={index} variant="caption" tone="warning">
+                  {gap.reason}
+                </AppText>
+              ))}
+            </View>
+          )}
+
+          <View style={styles.reviewGroup}>
+            <AppText variant="overline" tone="muted">
+              Not included in this review
+            </AppText>
+
+            {review.notIncluded.map((boundary) => (
+              <AppText key={boundary.area} variant="caption" tone="muted">
+                {boundary.area} — {boundary.detail}
+              </AppText>
+            ))}
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open security setup"
+            onPress={onOpenSetup}
+            style={({ pressed }) => [
+              styles.setupLink,
+              pressed && styles.revokeButtonPressed,
+            ]}
+          >
+            <AppText variant="label">Security setup</AppText>
+
+            <AppText variant="caption" tone="muted">
+              PIN, spending limits and recovery phrase
+            </AppText>
+          </Pressable>
+        </View>
+      )}
 
       {freeze.frozen ? (
         <View style={styles.summary}>
@@ -195,41 +311,6 @@ export function SecurityView({
         </View>
       )}
 
-      {scan && scan.coverage === "partial" && (
-        <View style={styles.summary}>
-          <AppText variant="overline" tone="danger">
-            Coverage: partial
-          </AppText>
-
-          <AppText variant="caption" tone="muted">
-            Some of your approval history could not be read just now, so this
-            list may be missing permissions. Treat it as incomplete, not as a
-            clean bill of health, and pull to refresh to try again.
-          </AppText>
-        </View>
-      )}
-
-      <AppText variant="caption" tone="muted" style={styles.notice}>
-        {scan
-          ? "Direct approvals are found from your approval history and re-checked against their current on-chain allowance; Permit2 permissions are checked against the known routers." +
-            (scan.unknownSpenderCount > 0
-              ? ` ${scan.unknownSpenderCount} active permission${
-                  scan.unknownSpenderCount === 1 ? " is to a contract" : "s are to contracts"
-                } not on the known list.`
-              : "") +
-            (scan.expiredCount > 0
-              ? ` ${scan.expiredCount} expired permission${
-                  scan.expiredCount === 1 ? "" : "s"
-                } ignored.`
-              : "") +
-            (scan.uncertainCount > 0
-              ? ` ${scan.uncertainCount} permission${
-                  scan.uncertainCount === 1 ? " is" : "s are"
-                } shown without a dollar figure: its limit or price could not be read, so treat the amount as unknown rather than small.`
-              : "")
-          : "Approvals let a contract move your tokens until you revoke them."}
-      </AppText>
-
       {approvals.length > 0 && (
         <View style={styles.summary}>
           <AppText variant="overline" tone="muted">
@@ -241,10 +322,18 @@ export function SecurityView({
           </AppText>
 
           <AppText variant="caption" tone={riskyCount > 0 ? "danger" : "muted"}>
-            {approvals.length} active permission
-            {approvals.length === 1 ? "" : "s"}
+            {activeCount} active permission
+            {activeCount === 1 ? "" : "s"}
             {riskyCount > 0 ? ` · ${riskyCount} risky` : ""}
           </AppText>
+
+          {review !== null && review.unvaluedPermissionCount > 0 && (
+            <AppText variant="caption" tone="warning">
+              {review.unvaluedPermissionCount} permission
+              {review.unvaluedPermissionCount === 1 ? "" : "s"} carry no dollar
+              figure and are not counted here. Their value is unknown, not zero.
+            </AppText>
+          )}
 
           <AppText variant="caption" tone="muted">
             The most these contracts could take from your current balances,
@@ -320,7 +409,11 @@ export function SecurityView({
                       ? "danger"
                       : approval.unlimited
                         ? "warning"
-                        : "primary"
+                        : // An amount we could not scale is not a confirmed
+                          // number and must not be styled like one.
+                          !approval.decimalsCertain
+                          ? "warning"
+                          : "primary"
                   }
                   tabular
                 >
@@ -332,10 +425,26 @@ export function SecurityView({
                     allowance could not be read
                   </AppText>
                 ) : approval.exposureUsd !== null ? (
-                  <AppText variant="caption" tone="muted" tabular>
-                    {formatUsd(approval.exposureUsd)} at risk
+                  <>
+                    <AppText variant="caption" tone="muted" tabular>
+                      {formatUsd(approval.exposureUsd)} at risk
+                    </AppText>
+
+                    {/* The figure rests on a read that failed — say so next to
+                        it rather than letting it look confirmed. */}
+                    {!approval.exposureCertain && (
+                      <AppText variant="caption" tone="warning">
+                        not fully confirmed
+                      </AppText>
+                    )}
+                  </>
+                ) : (
+                  // Never leave this blank: an amount we could not work out must
+                  // say so, or its absence reads as "nothing at stake".
+                  <AppText variant="caption" tone="warning">
+                    Exposure could not be determined
                   </AppText>
-                ) : null}
+                )}
               </View>
             </View>
 

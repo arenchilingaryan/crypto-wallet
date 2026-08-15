@@ -68,6 +68,10 @@ export type TokenApproval = {
   // permission is not silently treated as revoked, but without a number.
   allowanceCertain: boolean;
 
+  // False when the token's decimals are a placeholder rather than a fact, which
+  // makes any human-readable amount meaningless.
+  decimalsCertain: boolean;
+
   expiresAt: number | null;
 
   exposureUsd: number | null;
@@ -98,6 +102,22 @@ export type ApprovalScan = {
   // Distinct active spenders that are not on the known list — the contracts a
   // known-list-only scan would never have surfaced.
   unknownSpenderCount: number;
+
+  // Reads that did not happen, as opposed to reads that returned nothing.
+  // `unreadBudgetCount` counts tokens whose Permit2 budget probe failed —
+  // anything derived from that budget is unconfirmed, including a row that
+  // still manages to show a figure. `unreadPermit2Count` counts failed
+  // per-spender Permit2 lookups, where the answer "which contracts can pull
+  // this budget" was never obtained at all.
+  unreadBudgetCount: number;
+
+  unreadPermit2Count: number;
+
+  // How many Permit2 spenders this network's list even names. Direct approvals
+  // are discovered from history, but Permit2 sub-spenders are still only probed
+  // from a fixed list — zero here means that channel was never asked at all,
+  // which is a limit of the check, not evidence that nothing is there.
+  permit2SpendersChecked: number;
 };
 
 const UNLIMITED_THRESHOLD = 2n ** 255n;
@@ -142,6 +162,15 @@ export function scoreApproval({
   spenderKnown: boolean;
   holdsTokens?: boolean;
 }): ApprovalRisk {
+  // An unlimited approval to a spender we cannot identify is critical no matter
+  // the current balance or price: the standing authorization is the risk itself,
+  // and a $0-priced or empty balance today can refill tomorrow while the
+  // approval lives on. Escalate before any exposure-based downgrade so a
+  // drainer's unlimited approval is never scored merely "medium".
+  if (!spenderKnown && unlimited) {
+    return "critical";
+  }
+
   if (exposureUsd === null) {
     if (!holdsTokens) {
       return unlimited ? "medium" : "low";
@@ -215,15 +244,25 @@ function assetMeta(asset: PortfolioAsset): TokenMeta {
   };
 }
 
-function resolveMeta(pair: DirectPair): TokenMeta {
+function resolveMeta(pair: DirectPair): TokenMeta & { decimalsCertain: boolean } {
   if (pair.asset) {
-    return assetMeta(pair.asset);
+    // The portfolio itself falls back to 18 when a token does not report its
+    // decimals, so inherit that uncertainty rather than assuming a held token
+    // is always described correctly.
+    return {
+      ...assetMeta(pair.asset),
+      decimalsCertain: pair.asset.decimalsKnown,
+    };
   }
 
   if (pair.meta) {
-    return pair.meta;
+    return { ...pair.meta, decimalsCertain: true };
   }
 
+  // Nothing describes this token. 18 is only a placeholder so formatting does
+  // not crash — it is NOT a fact, and a figure derived from it would be wrong
+  // by orders of magnitude for a 6-decimal token. Flag it so nothing prints the
+  // amount as if it were known.
   return {
     symbol: shortenTokenAddress(pair.token),
 
@@ -232,6 +271,8 @@ function resolveMeta(pair: DirectPair): TokenMeta {
     decimals: 18,
 
     logo: null,
+
+    decimalsCertain: false,
   };
 }
 
@@ -377,6 +418,12 @@ export async function getApprovals(
 
   const permit2BudgetKnown = new Set<string>();
 
+  const permit2BudgetUnread = new Set<string>();
+
+  // Counted by token, not by call: one unreachable token must not read as five
+  // separate problems just because five spenders were probed for it.
+  const unreadPermit2Tokens = new Set<string>();
+
   function exposureOf(
     token: PortfolioAsset,
     allowanceTokens: number,
@@ -406,8 +453,12 @@ export async function getApprovals(
     if (result.status !== "success") {
       // A budget probe against the Permit2 contract is not an approval row; its
       // failure is expressed by leaving the budget unknown, which makes the
-      // Permit2 permissions uncertain further down.
+      // Permit2 permissions uncertain further down. Record it so the failure is
+      // reportable — otherwise a read that never happened leaves no trace and
+      // the scan looks complete.
       if (isPermit2Spender) {
+        permit2BudgetUnread.add(pair.token.toLowerCase());
+
         return;
       }
 
@@ -454,6 +505,8 @@ export async function getApprovals(
         unlimited: false,
 
         allowanceCertain: false,
+
+        decimalsCertain: meta.decimalsCertain,
 
         expiresAt: null,
 
@@ -531,6 +584,8 @@ export async function getApprovals(
 
       allowanceCertain: true,
 
+      decimalsCertain: meta.decimalsCertain,
+
       expiresAt: null,
 
       exposureUsd,
@@ -551,6 +606,15 @@ export async function getApprovals(
 
   permit2Results.forEach((result, index) => {
     if (result.status !== "success") {
+      // Same rule as the budget probe: a read that did not happen must leave a
+      // trace. Without this the scan cannot tell "no Permit2 permission" from
+      // "we never found out", and the review would call itself finished.
+      const failedToken = tokens[Math.floor(index / permit2Spenders.length)];
+
+      if (failedToken) {
+        unreadPermit2Tokens.add(failedToken.contractAddress.toLowerCase());
+      }
+
       return;
     }
 
@@ -623,6 +687,8 @@ export async function getApprovals(
 
       allowanceCertain: true,
 
+      decimalsCertain: token.decimalsKnown,
+
       expiresAt: expiration,
 
       exposureUsd,
@@ -648,6 +714,17 @@ export async function getApprovals(
   approvals.sort((a, b) => {
     if (a.risk !== b.risk) {
       return riskOrder[a.risk] - riskOrder[b.risk];
+    }
+
+    const aUnknown = a.exposureUsd === null;
+
+    const bUnknown = b.exposureUsd === null;
+
+    // An exposure we could not determine ranks above any figure we could. It
+    // cannot be honestly compared by size, so it must never be sorted as if it
+    // were zero and buried under smaller, merely-known amounts.
+    if (aUnknown !== bUnknown) {
+      return aUnknown ? -1 : 1;
     }
 
     return (b.exposureUsd ?? 0) - (a.exposureUsd ?? 0);
@@ -740,5 +817,11 @@ export async function getApprovals(
     coverage,
 
     unknownSpenderCount,
+
+    unreadBudgetCount: permit2BudgetUnread.size,
+
+    unreadPermit2Count: unreadPermit2Tokens.size,
+
+    permit2SpendersChecked: permit2Spenders.length,
   };
 }

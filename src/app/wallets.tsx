@@ -62,9 +62,15 @@ export default function WalletsScreen() {
     void loadWallets();
   }, []);
 
-  async function loadWallets() {
+  // `showSpinner` is off for refreshes that follow an action the user just
+  // took: the list is already on screen, and blanking it to a spinner would
+  // read as the wallets disappearing.
+  async function loadWallets({ showSpinner = true }: { showSpinner?: boolean } = {}) {
     try {
-      setLoading(true);
+      if (showSpinner) {
+        setLoading(true);
+      }
+
       setError(null);
 
       const [walletList, activeWallet, health] = await Promise.all([
@@ -91,13 +97,21 @@ export default function WalletsScreen() {
 
       setError(describeWalletError(error, "Failed to load wallets"));
     } finally {
-      setLoading(false);
+      if (showSpinner) {
+        setLoading(false);
+      }
     }
   }
 
   async function handleSelect(walletId: string) {
     try {
       await walletApi.setActive(walletId);
+
+      // Re-read before navigating away. Going back is not guaranteed to
+      // unmount this screen — when no navigator handles it the screen stays up
+      // — and a stale "Active" badge would point at a different wallet than the
+      // one that will sign the next transaction.
+      await loadWallets({ showSpinner: false });
 
       router.back();
     } catch (error) {
@@ -133,6 +147,12 @@ export default function WalletsScreen() {
       await walletApi.importFromMnemonic(importMnemonic);
 
       setImportMnemonic("");
+
+      // The imported wallet becomes the active one, so the list and the badge
+      // must reflect that here rather than relying on this screen going away.
+      setMode("list");
+
+      await loadWallets({ showSpinner: false });
 
       router.back();
     } catch (error) {
@@ -194,6 +214,12 @@ export default function WalletsScreen() {
     }
 
     setPendingWallet(null);
+
+    // Back to the list and re-read it: the new wallet is now the active one,
+    // and this screen may well still be mounted after navigating back.
+    setMode("list");
+
+    await loadWallets({ showSpinner: false });
 
     router.back();
   }

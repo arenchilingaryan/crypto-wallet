@@ -27,6 +27,8 @@ type ExploreViewProps = {
   onSelect: (market: MarketToken) => void;
 
   onSearch: () => void;
+
+  onOpenWatchlist: () => void;
 };
 
 const LISTS: { key: MarketList; label: string }[] = [
@@ -62,6 +64,7 @@ export function ExploreView({
   onChangeList,
   onSelect,
   onSearch,
+  onOpenWatchlist,
 }: ExploreViewProps) {
   return (
     <Screen scroll>
@@ -69,6 +72,17 @@ export function ExploreView({
         <AppText variant="title" tone="paper">
           Explore
         </AppText>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open your watchlist"
+          onPress={onOpenWatchlist}
+          style={styles.iconButton}
+        >
+          <AppText variant="label" tone="accent">
+            ★
+          </AppText>
+        </Pressable>
 
         <Pressable
           accessibilityRole="button"

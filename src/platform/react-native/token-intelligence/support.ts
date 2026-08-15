@@ -24,8 +24,11 @@ export function isTokenIntelligenceProviderSupported(
   return false;
 }
 
+// "Not supported here" is not "we tried and could not reach it". The wallet
+// keeps those two apart everywhere else, so the wording must keep them apart
+// too: retrying fixes one and can never fix the other.
 export function unsupportedProviderReason(chainId: number): string {
   return chainId === 11155111
-    ? "Token Intelligence is unavailable on Ethereum Sepolia"
-    : `Token Intelligence is unavailable on chain ${chainId}`;
+    ? "Token Intelligence does not cover Ethereum Sepolia"
+    : `Token Intelligence does not cover chain ${chainId}`;
 }

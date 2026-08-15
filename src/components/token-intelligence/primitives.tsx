@@ -107,7 +107,10 @@ export function SectionCard({
 
       {status === "unsupported" ? (
         <View style={styles.state}>
-          <AppText variant="bodyStrong">Unavailable on this network</AppText>
+          {/* Not "unavailable": that word belongs to a check that was tried
+              and failed. This one was never possible here, and retrying will
+              never change it. */}
+          <AppText variant="bodyStrong">Not covered on this network</AppText>
           <AppText variant="caption" tone="muted">
             This provider does not support the selected network.
           </AppText>

@@ -19,7 +19,10 @@ import {
   createUnavailableTokenIntelligence,
   loadTokenIntelligence,
 } from "@/platform/react-native/token-intelligence";
+import { parseRouteChainId } from "@/core/navigation/assetRoute";
 import { walletApi } from "@/platform/react-native/walletApi";
+import type { WatchStatus } from "@/core/watchlist/watchlistStore";
+import { watchlistApi } from "@/platform/react-native/watchlistApi";
 
 import {
     getAssetMarketData,
@@ -28,10 +31,18 @@ import {
 } from "@/core/blockchain/getAssetMarketData";
 
 export default function AssetScreen() {
-  const { id, origin } = useLocalSearchParams<{
+  const { id, origin, chainId: chainIdParam } = useLocalSearchParams<{
     id?: string;
     origin?: string;
+    chainId?: string;
   }>();
+
+  // Identity travels with the route. Falling back to the active network keeps
+  // older entry points working, but the route is what decides when it says so.
+  const routeChainId = parseRouteChainId(
+    chainIdParam,
+    ACTIVE_NETWORK.chain.id,
+  );
 
   const [asset, setAsset] = useState<PortfolioAsset | null>(null);
 
@@ -44,6 +55,12 @@ export default function AssetScreen() {
   const [intelligence, setIntelligence] =
     useState<TokenIntelligence | null>(null);
   const [intelligenceRequestNonce, setIntelligenceRequestNonce] = useState(0);
+
+  const [watchStatus, setWatchStatus] = useState<WatchStatus>("not-watching");
+
+  const [watchPending, setWatchPending] = useState(false);
+
+  const [watchError, setWatchError] = useState<string | null>(null);
 
   const marketRequestId = useRef(0);
   const forceIntelligenceRefresh = useRef(false);
@@ -63,8 +80,20 @@ export default function AssetScreen() {
       return;
     }
 
+    // The route may name a network this build does not run on (a deep link, or
+    // a watchlist entry made elsewhere). Everything below — balances, metadata,
+    // provider support — comes from the active network, so honouring a foreign
+    // chainId would render one network's risk verdict over another network's
+    // balance and then save a watchlist entry under the wrong identity. Refuse
+    // it instead of quietly substituting the active chain.
+    if (routeChainId !== ACTIVE_NETWORK.chain.id) {
+      setError(`This token is not on ${ACTIVE_NETWORK.name}`);
+      setLoading(false);
+      return;
+    }
+
     void loadAssetRef.current(id);
-  }, [id]);
+  }, [id, routeChainId]);
 
   const intelligenceAddress =
     asset?.type === "erc20" ? asset.contractAddress : null;
@@ -80,7 +109,7 @@ export default function AssetScreen() {
     let active = true;
     const forceRefresh = forceIntelligenceRefresh.current;
     const token = {
-      chainId: ACTIVE_NETWORK.chain.id,
+      chainId: routeChainId,
       address: intelligenceAddress,
       symbol: intelligenceSymbol ?? "unknown",
       name: intelligenceName ?? "unknown",
@@ -122,6 +151,7 @@ export default function AssetScreen() {
     intelligenceName,
     intelligenceRequestNonce,
     intelligenceSymbol,
+    routeChainId,
   ]);
 
   async function loadAsset(assetId: string) {
@@ -175,6 +205,9 @@ export default function AssetScreen() {
             balance: "0",
 
             decimals: metadata.decimals,
+
+            // Read from the contract's own metadata, not a fallback.
+            decimalsKnown: true,
 
             priceUsd: null,
 
@@ -235,6 +268,91 @@ export default function AssetScreen() {
       contractAddress: target.contractAddress,
       range: nextRange,
     });
+  }
+
+  // Only a contract-backed token has the (chain, address) identity a watchlist
+  // entry is made of; the native coin has no address to key on.
+  const watchableAddress =
+    asset?.type === "erc20" && asset.contractAddress
+      ? asset.contractAddress
+      : null;
+
+  useEffect(() => {
+    if (!watchableAddress) {
+      setWatchStatus("not-watching");
+
+      return;
+    }
+
+    let active = true;
+
+    void watchlistApi
+      .isWatched({
+        chainId: routeChainId,
+        address: watchableAddress,
+      })
+      .then((result) => {
+        if (active) {
+          setWatchStatus(result);
+        }
+      })
+      .catch((lookupError) => {
+        console.error("Watchlist lookup failed:", lookupError);
+
+        // Not knowing is its own state: an empty star here would assert the
+        // token is not on a list we could not even open.
+        if (active) {
+          setWatchStatus("unreadable");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [watchableAddress, routeChainId]);
+
+  async function handleToggleWatch() {
+    if (!watchableAddress || watchPending || watchStatus === "unreadable") {
+      return;
+    }
+
+    const id = {
+      chainId: routeChainId,
+      address: watchableAddress,
+    };
+
+    const previous = watchStatus;
+
+    const next = watchStatus === "watching" ? "not-watching" : "watching";
+
+    setWatchPending(true);
+
+    setWatchError(null);
+
+    // Optimistic, but only because the rollback below is real: if the write
+    // fails the star must not keep claiming the token was saved.
+    setWatchStatus(next);
+
+    try {
+      const result =
+        next === "watching"
+          ? await watchlistApi.add(id)
+          : await watchlistApi.remove(id);
+
+      if (!result.ok) {
+        setWatchStatus(previous);
+
+        setWatchError(result.message);
+      }
+    } catch (toggleError) {
+      console.error("Watchlist update failed:", toggleError);
+
+      setWatchStatus(previous);
+
+      setWatchError("The watchlist could not be updated.");
+    } finally {
+      setWatchPending(false);
+    }
   }
 
   async function handleChangeRange(nextRange: MarketRange) {
@@ -337,6 +455,18 @@ export default function AssetScreen() {
         range={range}
         marketPending={marketPending}
         intelligence={intelligence}
+        watch={
+          watchableAddress
+            ? {
+                status: watchStatus,
+                pending: watchPending,
+                error: watchError,
+                onToggle: () => {
+                  void handleToggleWatch();
+                },
+              }
+            : null
+        }
         onChangeRange={handleChangeRange}
         onRetryIntelligence={() => {
           forceIntelligenceRefresh.current = true;
@@ -365,7 +495,12 @@ export default function AssetScreen() {
           router.push({
             pathname: "/swap",
             params:
-              origin === "explore" && asset.type === "erc20"
+              // Arriving from Explore or the watchlist means the user is
+              // looking at something they are interested in acquiring, not
+              // something they hold — prefilling it as the token being sold
+              // would set up a swap of a zero balance.
+              (origin === "explore" || origin === "watchlist") &&
+              asset.type === "erc20"
                 ? { to: assetId }
                 : { from: assetId },
           });

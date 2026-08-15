@@ -7,10 +7,6 @@ export const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
 
-  notice: {
-    marginBottom: Spacing.xl,
-  },
-
   summary: {
     backgroundColor: Colors.surface,
 
@@ -26,8 +22,24 @@ export const styles = StyleSheet.create({
     marginBottom: Spacing.xl,
   },
 
-  sectionTitle: {
-    marginBottom: Spacing.sm,
+  reviewGroup: {
+    marginTop: Spacing.sm,
+
+    gap: Spacing.xs,
+  },
+
+  setupLink: {
+    marginTop: Spacing.md,
+
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+
+    gap: 2,
+
+    borderWidth: 1,
+    borderColor: Colors.border,
+
+    borderRadius: Radius.md,
   },
 
   state: {
