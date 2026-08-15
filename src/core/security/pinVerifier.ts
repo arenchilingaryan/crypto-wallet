@@ -1,5 +1,8 @@
-import { scrypt } from "@noble/hashes/scrypt.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+
+import { scryptKdf } from "./scryptKdf";
 
 export const PIN_KDF_PARAMS = {
   N: 16384,
@@ -8,7 +11,13 @@ export const PIN_KDF_PARAMS = {
   dkLen: 32,
 } as const;
 
-export type PinVerifier = {
+// v2 runs the password KDF twice per unlock: once against its own salt to check
+// the PIN, once against the vault salt to open the vault. An offline attacker
+// only ever needs one of those to test a candidate PIN, so the second is a cost
+// the owner pays alone. v3 keeps the vault derivation exactly as it is and
+// derives the check from that same output through HKDF — cheap, and separated
+// by its own info string so the verifier can never be mistaken for key material.
+export type PinVerifierV2 = {
   version: 2;
 
   vaultSalt?: string;
@@ -25,6 +34,57 @@ export type PinVerifier = {
 
   hash: string;
 };
+
+export type PinVerifierV3 = {
+  version: 3;
+
+  vaultSalt: string;
+
+  kdf: "scrypt";
+
+  N: number;
+
+  r: number;
+
+  p: number;
+
+  hash: string;
+};
+
+export type PinVerifier = PinVerifierV2 | PinVerifierV3;
+
+// Domain separation: this label is what stops the stored check value from being
+// usable as, or confusable with, the key that actually opens the vault.
+export const PIN_VERIFIER_V3_INFO = "wallet-pin-verifier-v3";
+
+export function deriveVerifierHashFromVaultKey(
+  vaultPinKey: Uint8Array,
+): string {
+  return bytesToHex(
+    hkdf(sha256, vaultPinKey, undefined, utf8ToBytes(PIN_VERIFIER_V3_INFO), 32),
+  );
+}
+
+export function createPinVerifierV3(
+  vaultSalt: string,
+  vaultPinKey: Uint8Array,
+): PinVerifierV3 {
+  return {
+    version: 3,
+
+    vaultSalt,
+
+    kdf: "scrypt",
+
+    N: PIN_KDF_PARAMS.N,
+
+    r: PIN_KDF_PARAMS.r,
+
+    p: PIN_KDF_PARAMS.p,
+
+    hash: deriveVerifierHashFromVaultKey(vaultPinKey),
+  };
+}
 
 export type PinKdfParams = {
   N: number;
@@ -56,7 +116,7 @@ export function derivePinHash(
     throw new Error("Refusing to derive a PIN hash with unsupported settings");
   }
 
-  const derived = scrypt(utf8ToBytes(pin), utf8ToBytes(salt), {
+  const derived = scryptKdf(utf8ToBytes(pin), utf8ToBytes(salt), {
     N: params.N,
     r: params.r,
     p: params.p,
@@ -71,7 +131,7 @@ export function deriveVaultPinKey(pin: string, vaultSalt: string): Uint8Array {
     throw new Error("Refusing to derive a vault key with unsupported settings");
   }
 
-  return scrypt(utf8ToBytes(pin), utf8ToBytes(`vault:${vaultSalt}`), {
+  return scryptKdf(utf8ToBytes(pin), utf8ToBytes(`vault:${vaultSalt}`), {
     N: PIN_KDF_PARAMS.N,
     r: PIN_KDF_PARAMS.r,
     p: PIN_KDF_PARAMS.p,
@@ -113,18 +173,49 @@ export function parsePinVerifier(raw: string | null): PinVerifier | null {
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<PinVerifier>;
+    // Deliberately a loose shape: this is untrusted JSON from disk, and the
+    // checks below are what turn it into one of the known versions.
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      kdf?: unknown;
+      N?: unknown;
+      r?: unknown;
+      p?: unknown;
+      salt?: unknown;
+      vaultSalt?: unknown;
+      hash?: unknown;
+    };
 
     if (
-      parsed?.version !== 2 ||
-      parsed.kdf !== "scrypt" ||
-      typeof parsed.salt !== "string" ||
+      parsed?.kdf !== "scrypt" ||
       typeof parsed.hash !== "string" ||
       typeof parsed.N !== "number" ||
       typeof parsed.r !== "number" ||
       typeof parsed.p !== "number" ||
       !areKdfParamsSane({ N: parsed.N, r: parsed.r, p: parsed.p })
     ) {
+      return null;
+    }
+
+    // A version we do not know may have been written by a newer build; refusing
+    // it keeps the vault intact instead of overwriting something we cannot read.
+    if (parsed.version === 3) {
+      if (typeof parsed.vaultSalt !== "string" || parsed.vaultSalt === "") {
+        return null;
+      }
+
+      return {
+        version: 3,
+        vaultSalt: parsed.vaultSalt,
+        kdf: "scrypt",
+        N: parsed.N,
+        r: parsed.r,
+        p: parsed.p,
+        hash: parsed.hash,
+      };
+    }
+
+    if (parsed.version !== 2 || typeof parsed.salt !== "string") {
       return null;
     }
 

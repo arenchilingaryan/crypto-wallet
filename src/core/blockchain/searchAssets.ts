@@ -3,7 +3,10 @@ import type { Address } from "viem";
 import type { AssetSearchResult } from "./assetSearch";
 import { classifyAssetSearchQuery } from "./classifyAssetSearchQuery";
 import type { Portfolio } from "./getPortfolio";
-import { searchNetworkTokens } from "./searchNetworkTokens";
+import {
+  searchNetworkTokens,
+  type TokenSearchCatalogue,
+} from "./searchNetworkTokens";
 
 function mapPortfolioAsset(
   asset: Portfolio["assets"][number],
@@ -109,21 +112,35 @@ function mergeResults(
   return result;
 }
 
+export type AssetSearch = {
+  results: AssetSearchResult[];
+
+  // Whether the wider token catalogue could be consulted. "unavailable" means
+  // the list is what we hold locally, not the whole answer — a caller must not
+  // present it as "no such token".
+  catalogue: TokenSearchCatalogue;
+};
+
 export async function searchAssets(
   portfolio: Portfolio,
   rawQuery: string,
-): Promise<AssetSearchResult[]> {
+): Promise<AssetSearch> {
   const query = classifyAssetSearchQuery(rawQuery);
 
+  // The wallet's own assets are local facts; nothing external is consulted, so
+  // these answers are complete by construction.
   if (query.type === "empty") {
-    return getAllPortfolioAssets(portfolio);
+    return {
+      results: getAllPortfolioAssets(portfolio),
+      catalogue: "complete",
+    };
   }
 
   if (query.type === "address") {
     const local = findPortfolioTokenByAddress(portfolio, query.address);
 
     if (local) {
-      return [local];
+      return { results: [local], catalogue: "complete" };
     }
 
     return searchNetworkTokens(query.address);
@@ -133,5 +150,9 @@ export async function searchAssets(
 
   const remote = await searchNetworkTokens(query.query);
 
-  return mergeResults(local, remote);
+  return {
+    results: mergeResults(local, remote.results),
+
+    catalogue: remote.catalogue,
+  };
 }

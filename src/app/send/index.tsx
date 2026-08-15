@@ -91,7 +91,9 @@ export default function SendAssetPickerScreen() {
             return;
           }
 
-          setResults(nextResults.filter((item) => item.source !== "network"));
+          setResults(
+            nextResults.results.filter((item) => item.source !== "network"),
+          );
         })
         .catch((searchError) => {
           if (currentRequest !== requestId.current) {

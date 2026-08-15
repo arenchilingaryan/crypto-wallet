@@ -33,6 +33,11 @@ type AssetPickerViewProps = {
   // of a star would quietly assert "not watching" for every row.
   watchUnavailable?: boolean;
 
+  // True when the wider token catalogue could not be consulted. Without this,
+  // "no assets found" would claim a token does not exist when in fact the
+  // search never happened.
+  catalogueUnavailable?: boolean;
+
   onChangeQuery: (value: string) => void;
 
   onSelect: (asset: AssetSearchResult) => void;
@@ -48,6 +53,7 @@ export function AssetPickerView({
   error,
   isWatched,
   watchUnavailable = false,
+  catalogueUnavailable = false,
   onChangeQuery,
   onSelect,
   onBack,
@@ -102,6 +108,13 @@ export function AssetPickerView({
         </AppText>
       )}
 
+      {catalogueUnavailable && (
+        <AppText variant="caption" tone="warning">
+          Wider token search is unavailable right now — only assets this app
+          already knows are listed. This is not a complete result.
+        </AppText>
+      )}
+
       {watchUnavailable && (
         <AppText variant="caption" tone="warning">
           Watchlist status unavailable — these results do not show whether you
@@ -111,10 +124,15 @@ export function AssetPickerView({
 
       {!loading && !error && query.trim().length > 0 && results.length === 0 && (
         <View style={styles.empty}>
-          <AppText variant="bodyStrong">No assets found</AppText>
+          {/* Only claim nothing matched when the search actually ran. */}
+          <AppText variant="bodyStrong">
+            {catalogueUnavailable ? "Nothing to show yet" : "No assets found"}
+          </AppText>
 
           <AppText variant="caption" tone="muted">
-            Try another name, symbol or contract address.
+            {catalogueUnavailable
+              ? "The token search could not run, so this is not a result. Try again in a moment, or paste the contract address."
+              : "Try another name, symbol or contract address."}
           </AppText>
         </View>
       )}

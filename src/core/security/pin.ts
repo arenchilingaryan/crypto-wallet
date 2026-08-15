@@ -4,6 +4,8 @@ import type { KeyValueStorage } from "@/core/ports/keyValueStorage";
 import {
   createPinVerifier,
   derivePinHash,
+  deriveVaultPinKey,
+  deriveVerifierHashFromVaultKey,
   parsePinVerifier,
   safeEqual,
   serializePinVerifier,
@@ -25,6 +27,11 @@ type PinDependencies = {
 export type VerifyPinResult =
   | {
       ok: true;
+
+      // Present when the check itself derived the vault key (verifier v3), so
+      // the caller can open the vault without paying for a second password KDF.
+      // Absent on the legacy path, where the check used its own salt.
+      vaultPinKey?: Uint8Array;
     }
   | {
       ok: false;
@@ -167,15 +174,31 @@ export async function verifyPin(
 
   let matched: boolean;
 
+  let vaultPinKey: Uint8Array | undefined;
+
   if (verifier) {
-    matched = safeEqual(
-      derivePinHash(pin, verifier.salt, {
-        N: verifier.N,
-        r: verifier.r,
-        p: verifier.p,
-      }),
-      verifier.hash,
-    );
+    if (verifier.version === 3) {
+      // The single expensive step of the whole unlock.
+      const derived = deriveVaultPinKey(pin, verifier.vaultSalt);
+
+      matched = safeEqual(
+        deriveVerifierHashFromVaultKey(derived),
+        verifier.hash,
+      );
+
+      if (matched) {
+        vaultPinKey = derived;
+      }
+    } else {
+      matched = safeEqual(
+        derivePinHash(pin, verifier.salt, {
+          N: verifier.N,
+          r: verifier.r,
+          p: verifier.p,
+        }),
+        verifier.hash,
+      );
+    }
 
     if (matched) {
       await clearLegacyPin(storage);
@@ -212,6 +235,8 @@ export async function verifyPin(
 
     return {
       ok: true,
+
+      vaultPinKey,
     };
   }
 

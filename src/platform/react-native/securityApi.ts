@@ -65,7 +65,7 @@ export const securityApi = {
       return result;
     }
 
-    await adoptPin(pin);
+    await adoptPin(pin, result.vaultPinKey);
 
     const tokenBytes = await expoRandomSource.getBytes(32);
 
@@ -117,6 +117,8 @@ export const securityApi = {
   async setupPin(pin: string) {
     await createPin(pin, dependencies);
 
+    // A freshly created PIN has no derived key to hand over yet; adoptPin
+    // derives it and upgrades the stored check to v3 on its way out.
     await adoptPin(pin);
 
     unlockSession();
@@ -140,7 +142,7 @@ export const securityApi = {
     timing?.step("verify");
 
     if (result.ok) {
-      await adoptPin(pin);
+      await adoptPin(pin, result.vaultPinKey);
 
       timing?.step("vault");
     }
@@ -154,7 +156,7 @@ export const securityApi = {
     timing?.step("verify");
 
     if (result.ok) {
-      await adoptPin(pin);
+      await adoptPin(pin, result.vaultPinKey);
 
       timing?.step("vault");
 

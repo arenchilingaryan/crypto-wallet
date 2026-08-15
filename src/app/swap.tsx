@@ -215,6 +215,10 @@ export default function SwapScreen() {
 
   const [pickerLoading, setPickerLoading] = useState(false);
 
+  // The wider token catalogue could not be consulted; results are local only.
+  const [pickerCatalogueUnavailable, setPickerCatalogueUnavailable] =
+    useState(false);
+
   const [pickerError, setPickerError] = useState<string | null>(null);
 
   const [submitPhase, setSubmitPhase] = useState<SubmitPhase | null>(null);
@@ -487,9 +491,11 @@ export default function SwapScreen() {
 
           setPickerResults(
             picker === "pay"
-              ? results.filter((item) => item.source !== "network")
-              : results,
+              ? results.results.filter((item) => item.source !== "network")
+              : results.results,
           );
+
+          setPickerCatalogueUnavailable(results.catalogue === "unavailable");
         })
         .catch((searchError) => {
           if (currentRequest !== pickerRequestId.current) {
@@ -1016,6 +1022,7 @@ export default function SwapScreen() {
         results={pickerResults}
         loading={pickerLoading}
         error={pickerError}
+        catalogueUnavailable={pickerCatalogueUnavailable}
         onChangeQuery={setPickerQuery}
         onSelect={(asset) => {
           void handlePickAsset(asset);

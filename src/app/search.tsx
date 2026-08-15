@@ -43,6 +43,9 @@ export default function SearchScreen() {
 
   const [watchUnavailable, setWatchUnavailable] = useState(false);
 
+  // The wider token catalogue could not be consulted; results are local only.
+  const [catalogueUnavailable, setCatalogueUnavailable] = useState(false);
+
   const requestId = useRef(0);
 
   // Re-read on focus, not just on mount: this screen stays mounted while the
@@ -150,7 +153,9 @@ export default function SearchScreen() {
             return;
           }
 
-          setResults(nextResults);
+          setResults(nextResults.results);
+
+          setCatalogueUnavailable(nextResults.catalogue === "unavailable");
         })
         .catch((searchError) => {
           if (currentRequest !== requestId.current) {
@@ -189,6 +194,7 @@ export default function SearchScreen() {
       loading={loading}
       error={error}
       watchUnavailable={watchUnavailable}
+      catalogueUnavailable={catalogueUnavailable}
       isWatched={(asset) =>
         asset.contractAddress
           ? watchedKeys.has(

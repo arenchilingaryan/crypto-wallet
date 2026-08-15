@@ -83,7 +83,25 @@ import {
   serializeFreeze,
   WalletFrozenError,
 } from "@/core/security/panicFreeze";
-import { parsePinVerifier } from "@/core/security/pinVerifier";
+import {
+  createPinVerifier,
+  createPinVerifierV3,
+  derivePinHash,
+  deriveVaultPinKey,
+  deriveVerifierHashFromVaultKey,
+  parsePinVerifier,
+  PIN_VERIFIER_V3_INFO,
+  safeEqual,
+  serializePinVerifier,
+} from "@/core/security/pinVerifier";
+import {
+  activeScryptName,
+  checkScryptParity,
+  jsScrypt,
+  resetScryptImplementation,
+  SCRYPT_PARITY_VECTORS,
+  adoptScryptImplementation,
+} from "@/core/security/scryptKdf";
 import { resolveBroadcast } from "@/core/transactions/resolveBroadcast";
 import { buildExecutionStory } from "@/core/transactions/executionStory";
 import { quoteToBlockSeconds } from "@/core/transactions/analyzeExecution";
@@ -179,6 +197,7 @@ import {
 import { encodePermit2Revoke } from "@/core/transactions/permit2Revoke";
 import { validateSwapIntent } from "@/core/transactions/swap";
 import { mergeActivity } from "@/core/blockchain/mergeActivity";
+import { searchNetworkTokens } from "@/core/blockchain/searchNetworkTokens";
 import {
   isOutflow,
   presentActivity,
@@ -7551,6 +7570,205 @@ export async function main() {
         isWatched(after.items, idA),
       `${after.status === "ready" ? after.items.length : "unreadable"} items after a total enrichment failure`,
     );
+  }
+
+  // ---- PIN KDF: a different engine must produce identical bytes -----------
+  {
+    check(
+      "the shipped JS engine reproduces the golden vectors it is measured against",
+      checkScryptParity(jsScrypt).ok && SCRYPT_PARITY_VECTORS.length >= 3,
+      `${SCRYPT_PARITY_VECTORS.length} vectors at production parameters`,
+    );
+
+    // A faster engine is adopted only if it agrees byte for byte.
+    const adopted = adoptScryptImplementation("mirror", (pw, salt, params) =>
+      jsScrypt(pw, salt, params),
+    );
+
+    const derivedUnderMirror = derivePinHash("123456", "abc");
+
+    resetScryptImplementation();
+
+    const derivedUnderJs = derivePinHash("123456", "abc");
+
+    check(
+      "an engine that agrees is adopted and changes nothing about the derived key",
+      adopted.ok &&
+        derivedUnderMirror === derivedUnderJs &&
+        activeScryptName() === "js",
+      `adopted: ${adopted.ok}, identical output: ${derivedUnderMirror === derivedUnderJs}`,
+    );
+
+    // Every way an engine can be wrong: wrong bytes, wrong length, and throwing.
+    const wrongBytes = adoptScryptImplementation("wrong", (pw, salt, params) => {
+      const out = jsScrypt(pw, salt, params);
+
+      out[0] ^= 0xff;
+
+      return out;
+    });
+
+    const wrongLength = adoptScryptImplementation("short", (pw, salt, params) =>
+      jsScrypt(pw, salt, params).slice(0, 16),
+    );
+
+    const throws = adoptScryptImplementation("broken", () => {
+      throw new Error("native module blew up");
+    });
+
+    check(
+      "an engine that disagrees, truncates or throws is refused, and the JS engine stays active",
+      !wrongBytes.ok &&
+        !wrongLength.ok &&
+        !throws.ok &&
+        activeScryptName() === "js" &&
+        derivePinHash("123456", "abc") === derivedUnderJs,
+      `${wrongBytes.ok ? "adopted" : "refused"} / ${wrongLength.ok ? "adopted" : "refused"} / ${throws.ok ? "adopted" : "refused"}`,
+    );
+  }
+
+  // ---- PIN verifier v3: one derivation, same vault ------------------------
+  {
+    const vaultSalt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+    const rightPin = "123456";
+
+    const wrongPin = "654321";
+
+    const vaultKey = deriveVaultPinKey(rightPin, vaultSalt);
+
+    const v3 = createPinVerifierV3(vaultSalt, vaultKey);
+
+    check(
+      "v3 checks the PIN from the very key that opens the vault, not a second derivation",
+      v3.version === 3 &&
+        v3.vaultSalt === vaultSalt &&
+        safeEqual(deriveVerifierHashFromVaultKey(vaultKey), v3.hash) &&
+        // The stored check must not be the key itself.
+        v3.hash !== bytesToHex(vaultKey),
+      "verifier is HKDF of the vault key under its own info label",
+    );
+
+    check(
+      "a wrong PIN fails the v3 check and never yields the vault key",
+      !safeEqual(
+        deriveVerifierHashFromVaultKey(deriveVaultPinKey(wrongPin, vaultSalt)),
+        v3.hash,
+      ),
+      "a different PIN derives a different key and a different check value",
+    );
+
+    check(
+      "the verifier is domain-separated: it cannot be produced without its own label",
+      deriveVerifierHashFromVaultKey(vaultKey) !== bytesToHex(vaultKey) &&
+        PIN_VERIFIER_V3_INFO === "wallet-pin-verifier-v3",
+      PIN_VERIFIER_V3_INFO,
+    );
+
+    const roundTripped = parsePinVerifier(serializePinVerifier(v3));
+
+    const legacy = createPinVerifier(rightPin, "deadbeef", vaultSalt);
+
+    const legacyRoundTripped = parsePinVerifier(serializePinVerifier(legacy));
+
+    check(
+      "both versions survive storage: v2 keeps working while v3 is readable",
+      roundTripped?.version === 3 &&
+        legacyRoundTripped?.version === 2 &&
+        legacyRoundTripped.salt === "deadbeef" &&
+        legacyRoundTripped.vaultSalt === vaultSalt,
+      `v3: ${roundTripped?.version}, v2: ${legacyRoundTripped?.version}`,
+    );
+
+    check(
+      "a v3 record missing its vault salt, or written by a future version, is refused rather than half-read",
+      parsePinVerifier(
+        JSON.stringify({ ...v3, vaultSalt: undefined }),
+      ) === null &&
+        parsePinVerifier(JSON.stringify({ ...v3, version: 4 })) === null &&
+        // A record that is otherwise a perfectly good v2 but claims a version
+        // we do not know must still be refused — that is the case a lenient
+        // parser would wave through and then misread.
+        parsePinVerifier(JSON.stringify({ ...legacy, version: 4 })) === null &&
+        parsePinVerifier(JSON.stringify({ ...legacy, version: 1 })) === null &&
+        parsePinVerifier(JSON.stringify({ ...v3, hash: 42 })) === null,
+      "an unreadable check never silently becomes a readable one",
+    );
+
+    // An interrupted migration must leave the old record working.
+    const beforeMigration = serializePinVerifier(legacy);
+
+    const stillUsable = parsePinVerifier(beforeMigration);
+
+    check(
+      "if the upgrade to v3 never lands, the v2 record still verifies the same PIN",
+      stillUsable?.version === 2 &&
+        safeEqual(
+          derivePinHash(rightPin, stillUsable.salt, {
+            N: stillUsable.N,
+            r: stillUsable.r,
+            p: stillUsable.p,
+          }),
+          stillUsable.hash,
+        ),
+      "migration is an optimisation, never a prerequisite for unlocking",
+    );
+
+    check(
+      "the upgrade keeps the vault key identical, so the same vault still opens",
+      bytesToHex(deriveVaultPinKey(rightPin, vaultSalt)) ===
+        bytesToHex(vaultKey) && v3.N === 16384 && v3.r === 8 && v3.p === 1,
+      "same salt, same parameters, same derived bytes",
+    );
+  }
+
+  // ---- Token search: a catalogue that is down is not an empty catalogue ----
+  {
+    const realFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = (async () => ({
+        ok: false,
+        status: 429,
+        async json() {
+          return {};
+        },
+      })) as unknown as typeof fetch;
+
+      const rateLimited = await searchNetworkTokens("chainlink");
+
+      globalThis.fetch = (async () => {
+        throw new Error("network down");
+      }) as unknown as typeof fetch;
+
+      const offline = await searchNetworkTokens("chainlink");
+
+      globalThis.fetch = (async () => ({
+        ok: true,
+        status: 200,
+        async json() {
+          return { included: [] };
+        },
+      })) as unknown as typeof fetch;
+
+      const answered = await searchNetworkTokens("chainlink");
+
+      check(
+        "a token catalogue that rate-limits or is offline is reported as unavailable, not as no matches",
+        rateLimited.catalogue === "unavailable" &&
+          offline.catalogue === "unavailable" &&
+          answered.catalogue === "complete",
+        `429: ${rateLimited.catalogue}, offline: ${offline.catalogue}, ok: ${answered.catalogue}`,
+      );
+
+      check(
+        "a failing catalogue never throws away what the app already knows locally",
+        Array.isArray(rateLimited.results) && Array.isArray(offline.results),
+        "local matches survive the failure",
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   }
 
   console.log(

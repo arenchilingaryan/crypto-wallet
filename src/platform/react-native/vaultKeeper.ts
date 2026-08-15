@@ -7,6 +7,7 @@ import {
 import { parseWalletVault } from "@/core/wallet/walletVault";
 
 import {
+  createPinVerifierV3,
   deriveVaultPinKey,
   parsePinVerifier,
   serializePinVerifier,
@@ -67,14 +68,21 @@ async function ensureVaultSalt(verifier: PinVerifier): Promise<string> {
   return vaultSalt;
 }
 
-export async function adoptPin(pin: string): Promise<boolean> {
+export async function adoptPin(
+  pin: string,
+  // Supplied when the PIN check already derived it (verifier v3). Reusing it is
+  // the entire point of v3: one password KDF per unlock instead of two.
+  derivedPinKey?: Uint8Array,
+): Promise<boolean> {
   const verifier = await readVerifier();
 
   if (!verifier) {
     return false;
   }
 
-  const pinKey = deriveVaultPinKey(pin, await ensureVaultSalt(verifier));
+  const vaultSalt = await ensureVaultSalt(verifier);
+
+  const pinKey = derivedPinKey ?? deriveVaultPinKey(pin, vaultSalt);
 
   if ((await slots.readSlot()) !== null && !(await hasDeviceKey())) {
     throw new Error(
@@ -92,9 +100,35 @@ export async function adoptPin(pin: string): Promise<boolean> {
 
   setUnlockMaterial(masterKey);
 
+  // Only now — the vault actually opened with this key, so a verifier derived
+  // from it is guaranteed to agree with the vault. Migrating any earlier could
+  // write a check value that no longer matches what unlocks the wallet.
+  await migrateVerifierToV3(verifier, vaultSalt, pinKey);
+
   await flushPendingSecrets();
 
   return true;
+}
+
+async function migrateVerifierToV3(
+  verifier: PinVerifier,
+  vaultSalt: string,
+  pinKey: Uint8Array,
+): Promise<void> {
+  if (verifier.version === 3) {
+    return;
+  }
+
+  try {
+    await expoKeyValueStorage.set(
+      SECURITY_STORAGE_KEYS.pinVerifier,
+      serializePinVerifier(createPinVerifierV3(vaultSalt, pinKey)),
+    );
+  } catch (error) {
+    // An interrupted migration is harmless: the v2 verifier is still there and
+    // still correct, so the next unlock simply pays for two derivations again.
+    console.error("Could not upgrade the stored PIN check:", error);
+  }
 }
 
 async function flushPendingSecrets(): Promise<void> {

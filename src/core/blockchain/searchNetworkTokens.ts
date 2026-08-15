@@ -57,13 +57,24 @@ function matchesQuery(token: GeckoToken, query: string) {
   );
 }
 
+// "We searched and found nothing" and "we could not search" look identical in a
+// bare array, and the second one told as the first is how a user concludes a
+// token does not exist when in truth the catalogue was simply unreachable.
+export type TokenSearchCatalogue = "complete" | "unavailable";
+
+export type NetworkTokenSearch = {
+  results: AssetSearchResult[];
+
+  catalogue: TokenSearchCatalogue;
+};
+
 export async function searchNetworkTokens(
   rawQuery: string,
-): Promise<AssetSearchResult[]> {
+): Promise<NetworkTokenSearch> {
   const query = rawQuery.trim();
 
   if (!query) {
-    return [];
+    return { results: [], catalogue: "complete" };
   }
 
   if (
@@ -74,32 +85,36 @@ export async function searchNetworkTokens(
     const known = findKnownTokenByAddress(ACTIVE_NETWORK.id, getAddress(query));
 
     if (known) {
-      return [mapKnownToken(known)];
+      return { results: [mapKnownToken(known)], catalogue: "complete" };
     }
 
     const metadata = await getTokenMetadata(query);
 
     if (!metadata) {
-      return [];
+      return { results: [], catalogue: "complete" };
     }
 
-    return [
-      {
-        type: "erc20",
+    return {
+      catalogue: "complete",
 
-        symbol: metadata.symbol,
+      results: [
+        {
+          type: "erc20",
 
-        name: metadata.name,
+          symbol: metadata.symbol,
 
-        contractAddress: metadata.address,
+          name: metadata.name,
 
-        logo: metadata.logo,
+          contractAddress: metadata.address,
 
-        source: "network",
+          logo: metadata.logo,
 
-        balance: null,
-      },
-    ];
+          source: "network",
+
+          balance: null,
+        },
+      ],
+    };
   }
 
   const knownMatches = searchKnownTokensByText(ACTIVE_NETWORK.id, query).map(
@@ -109,7 +124,9 @@ export async function searchNetworkTokens(
   const network = ACTIVE_NETWORK.tokenSearchNetwork;
 
   if (!network) {
-    return knownMatches;
+    // This network has no wider catalogue at all — the local list is the whole
+    // truth here, not a degraded version of something bigger.
+    return { results: knownMatches, catalogue: "complete" };
   }
 
   const params = new URLSearchParams({
@@ -120,22 +137,35 @@ export async function searchNetworkTokens(
     include: "base_token,quote_token",
   });
 
-  const response = await fetch(
-    `https://api.geckoterminal.com/api/v2/search/pools?${params.toString()}`,
-    {
-      headers: {
-        Accept: "application/json",
+  // The wider catalogue is a third party on a shared free tier: it rate-limits
+  // and goes down. When it does, fall back to what this app already knows
+  // rather than throwing — otherwise one unavailable service also erases the
+  // curated tokens we hold locally, and the user cannot even pick a well-known
+  // one. A narrower result is honest; an empty screen is not.
+  let tokens: GeckoSearchResponse["included"] = [];
+
+  try {
+    const response = await fetch(
+      `https://api.geckoterminal.com/api/v2/search/pools?${params.toString()}`,
+      {
+        headers: {
+          Accept: "application/json",
+        },
       },
-    },
-  );
+    );
 
-  if (!response.ok) {
-    throw new Error(`Token search failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Token search failed: ${response.status}`);
+    }
+
+    const result = (await response.json()) as GeckoSearchResponse;
+
+    tokens = result.included ?? [];
+  } catch (searchError) {
+    console.error("Wider token search unavailable:", searchError);
+
+    return { results: knownMatches, catalogue: "unavailable" };
   }
-
-  const result = (await response.json()) as GeckoSearchResponse;
-
-  const tokens = result.included ?? [];
 
   const seen = new Set<string>(
     knownMatches
@@ -185,5 +215,5 @@ export async function searchNetworkTokens(
     });
   }
 
-  return results.slice(0, 20);
+  return { results: results.slice(0, 20), catalogue: "complete" };
 }

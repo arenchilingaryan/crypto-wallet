@@ -99,7 +99,7 @@ export default function ReceiveScreen() {
             return;
           }
 
-          setResults(nextResults);
+          setResults(nextResults.results);
         })
         .catch((searchError) => {
           if (currentRequest !== requestId.current) {
